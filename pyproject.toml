@@ -1,0 +1,13 @@
+[project]
+name = "debrid-concierge"
+version = "0.1.0"
+description = "hands torbox cloud results to a local download manager"
+requires-python = ">=3.12"
+dependencies = ["requests"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+markers = ["integration: live torbox calls, skipped without a key"]
+
+[tool.ruff]
+line-length = 100
