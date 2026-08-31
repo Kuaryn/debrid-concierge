@@ -9,7 +9,8 @@ import os
 import sys
 from pathlib import Path
 
-APP_DIR = Path(os.environ["APPDATA"]) / "debrid-concierge"
+# appdata is missing off-windows; fall back so tests can import this module
+APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "debrid-concierge"
 CONFIG_FILE = APP_DIR / "config.json"
 
 DEFAULTS = {"torbox_key_enc": None, "last_folder": None}
