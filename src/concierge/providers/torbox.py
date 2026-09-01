@@ -1,5 +1,6 @@
 """TorBox API client covering the endpoints the concierge actually uses."""
 
+import os
 import re
 import time
 from collections import deque
@@ -76,8 +77,8 @@ class TorBoxClient:
                 time.sleep(2 ** (attempt - 1))
             try:
                 if files:
-                    for fh in files.values():
-                        fh.seek(0)  # multipart handles need rewinding between tries
+                    for v in files.values():
+                        (v[1] if isinstance(v, tuple) else v).seek(0)  # rewind between tries
                 resp = self.http.request(
                     method, BASE + "/" + path,
                     params=params, data=data, files=files, json=json, timeout=15,
@@ -134,8 +135,13 @@ class TorBoxClient:
             # no retry: a timed-out add may still land; caller reconciles
             return self._request("POST", "torrents/createtorrent", data=form, tries=1)
         with open(torrent_path, "rb") as fh:
-            return self._request("POST", "torrents/createtorrent", data=form,
-                                 files={"file": fh}, tries=1)
+            # torbox's parser rejects file parts without a content type
+            return self._request(
+                "POST", "torrents/createtorrent", data=form,
+                files={"file": (os.path.basename(torrent_path), fh,
+                                "application/x-bittorrent")},
+                tries=1,
+            )
 
     def magnettofile(self, magnet: str) -> bytes:
         # conversion only, adds nothing to the cloud; raw bencode, not the
