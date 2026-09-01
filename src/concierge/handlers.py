@@ -4,9 +4,9 @@ import argparse
 import os
 import subprocess
 import sys
-import time
 
 from concierge import orchestrator as orch
+from concierge import worker
 
 # detach flags only exist on windows; tests import this module off-windows
 _DETACH_FLAGS = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
@@ -32,10 +32,7 @@ def main(argv=None) -> int:
         )
         print("spawned worker for", a.source)
         return 0
-    o = orch.Orchestrator()
-    job = o.resume_or_submit(a.source, a.folder)
-    while job.state not in (orch.DONE, orch.FAILED):
-        time.sleep(o.next_delay(job))
-        o.tick()
+    # blocking mode takes the same lock as a detached worker
+    job = worker.run(a.source, a.folder)
     print(job.job_id, job.state, job.error or f"handed to abdm into {a.folder}")
     return 0 if job.state == orch.DONE else 1

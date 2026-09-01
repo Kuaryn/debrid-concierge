@@ -17,6 +17,7 @@ DONE = "done"  # abdm owns local progress once handed off, so handed_off == done
 FAILED = "failed"
 
 POLL_DELTAS = (0, 5, 25)  # polls land at 0s/5s/30s, then every 10s
+TERMINAL = (DONE, FAILED)
 
 
 @dataclass
