@@ -130,6 +130,52 @@ def test_retry_after_partial_handoff(env):
     assert [h[2] for h in adm.handed] == ["b.mkv"]
 
 
+def test_resume_or_submit_resumes_pending(env):
+    o, _, _ = env
+    o.submit("C:/dl", magnet="magnet:?xt=urn:btih:x")
+    j = o.resume_or_submit("magnet:?xt=urn:btih:x", "C:/dl")
+    assert j.state == CLOUD_PENDING
+    assert len(o.jobs) == 1  # resumed, not re-added
+
+
+def test_resume_or_submit_retries_failed_handoff_with_files(env):
+    o, _, _ = env
+    j = Job(source="magnet:?xt=urn:btih:x", folder="C:/dl", state=FAILED, torrent_id=7,
+            files=[{"id": 1, "name": "a.mkv"}], error="abdm down")
+    o.jobs[j.job_id] = j
+    got = o.resume_or_submit("magnet:?xt=urn:btih:x", "C:/dl")
+    assert got is j
+    assert got.state == READY
+    assert got.error is None
+    assert len(o.jobs) == 1
+
+
+def test_resume_or_submit_retries_failed_handoff_without_files(env):
+    o, _, _ = env
+    j = Job(source="magnet:?xt=urn:btih:x", folder="C:/dl", state=FAILED, torrent_id=7)
+    o.jobs[j.job_id] = j
+    got = o.resume_or_submit("magnet:?xt=urn:btih:x", "C:/dl")
+    assert got.state == CLOUD_PENDING
+
+
+def test_resume_or_submit_done_job_is_not_resumed(env):
+    o, _, _ = env
+    j = Job(source="magnet:?xt=urn:btih:x", folder="C:/dl", state=DONE, torrent_id=7)
+    o.jobs[j.job_id] = j
+    got = o.resume_or_submit("magnet:?xt=urn:btih:x", "C:/dl")
+    assert got is not j
+    assert len(o.jobs) == 2  # sharp edge: a done job re-adds on re-click
+
+
+def test_resume_or_submit_torrent_path(env, tmp_path):
+    o, tb, _ = env
+    p = tmp_path / "x.torrent"
+    p.write_bytes(b"d8:announce0:e")
+    j = o.resume_or_submit(str(p), "C:/dl")
+    assert tb.created == str(p)
+    assert j.state == CLOUD_PENDING
+
+
 def test_abdm_down_fails_then_retry_hands_all(env):
     o, _, adm = env
     adm.fail_times = 1

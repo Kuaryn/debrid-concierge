@@ -74,6 +74,30 @@ class Orchestrator:
         self.save()
         return j
 
+    def resume_or_submit(self, source: str, folder: str) -> Job:
+        # a re-click of the same source must resume, never double-add
+        job = next(
+            (j for j in self.jobs.values()
+             if j.source == source and j.state not in (DONE, FAILED)),
+            None,
+        )
+        if job is None:
+            # a failed hand-off with a live torrent_id retries; only a failed add re-adds
+            job = next(
+                (j for j in self.jobs.values()
+                 if j.source == source and j.state == FAILED and j.torrent_id),
+                None,
+            )
+            if job is not None:
+                job.state = READY if job.files else CLOUD_PENDING
+                job.error = None
+        if job is None:
+            if source.startswith("magnet:"):
+                job = self.submit(folder, magnet=source)
+            else:
+                job = self.submit(folder, torrent_path=source)
+        return job
+
     def next_delay(self, j: Job) -> int:
         return POLL_DELTAS[j.polls] if j.polls < len(POLL_DELTAS) else 10
 
