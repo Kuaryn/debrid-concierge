@@ -10,9 +10,11 @@ def test_repoint_writes_all_four_keys(monkeypatch):
     keys = [c[2] for c in calls]
     assert keys == [
         r"HKCU\Software\Classes\magnet\shell\open\command",
+        r"HKCU\Software\Classes\debrid-concierge.torrent",
         r"HKCU\Software\Classes\debrid-concierge.torrent\shell\open\command",
         r"HKCU\Software\Classes\.torrent",
         r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
     ]
-    assert "win_handler.py" in calls[0][7] and "%1" in calls[0][7]
-    assert "win_tray.py" in calls[3][8]
+    assert calls[1][7] == "Debrid Concierge"
+    assert "win_handler.py" in calls[2][7] and "%1" in calls[2][7]
+    assert "win_tray.py" in calls[4][8]

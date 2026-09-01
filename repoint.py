@@ -18,8 +18,9 @@ def _reg_add(key: str, value: str, name: str | None = None) -> None:
 def main() -> int:
     handler = f'"{PYW}" "{ROOT / "win_handler.py"}" "%1"'
     _reg_add(r"HKCU\Software\Classes\magnet\shell\open\command", handler)
-    # .torrent: ProgID + default; an existing UserChoice wins until one
-    # Open-with > always click rewrites it
+    # friendly name so the Open-with picker shows a real app name; the
+    # UserChoice hash can't be written by hand, the user picks us once
+    _reg_add(r"HKCU\Software\Classes\debrid-concierge.torrent", "Debrid Concierge")
     _reg_add(r"HKCU\Software\Classes\debrid-concierge.torrent\shell\open\command", handler)
     _reg_add(r"HKCU\Software\Classes\.torrent", "debrid-concierge.torrent")
     _reg_add(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
