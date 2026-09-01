@@ -9,6 +9,7 @@ class _StubJob:
         self.state = state
         self.source = source
         self.job_id = "x"
+        self.folder = "C:/dl"
         self.error = None if state == orch.DONE else "boom"
 
 
@@ -66,3 +67,24 @@ def test_detach_missing_file_still_exit_two(monkeypatch, tmp_path):
     rc = handlers.main([str(tmp_path / "nope.torrent"), "--folder", "C:/dl", "--detach"])
     assert rc == 2
     assert spawned == []
+
+
+def test_detach_without_folder_omits_flag(monkeypatch):
+    spawned = []
+
+    class _FakePopen:
+        def __init__(self, argv, **kw):
+            spawned.append(argv)
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    _patch_run(monkeypatch, orch.DONE)
+    rc = handlers.main(["magnet:?xt=urn:btih:x", "--detach"])
+    assert rc == 0
+    assert "--folder" not in spawned[0]
+
+
+def test_blocking_without_folder_passes_none(monkeypatch):
+    calls = _patch_run(monkeypatch, orch.DONE)
+    rc = handlers.main(["magnet:?xt=urn:btih:x"])
+    assert rc == 0
+    assert calls == [("magnet:?xt=urn:btih:x", None)]

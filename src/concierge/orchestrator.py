@@ -91,6 +91,16 @@ class Orchestrator:
 
     def resume_or_submit(self, source: str, folder: str) -> Job:
         # a re-click of the same source must resume, never double-add
+        job = self.match(source)
+        if job is None:
+            if source.startswith("magnet:"):
+                job = self.submit(folder, magnet=source)
+            else:
+                job = self.submit(folder, torrent_path=source)
+        return job
+
+    def match(self, source: str) -> Job | None:
+        # the job this source would resume, or None if a fresh add is needed
         job = next(
             (j for j in self.jobs.values()
              if j.source == source and j.state not in TERMINAL),
@@ -121,11 +131,6 @@ class Orchestrator:
                  if j.source == source and j.state == DONE),
                 None,
             )
-        if job is None:
-            if source.startswith("magnet:"):
-                job = self.submit(folder, magnet=source)
-            else:
-                job = self.submit(folder, torrent_path=source)
         return job
 
     def _reconcile(self, j: Job, magnet: str) -> bool:

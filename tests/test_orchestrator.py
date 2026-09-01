@@ -140,6 +140,11 @@ def test_retry_after_partial_handoff(env):
     assert [h[2] for h in adm.handed] == ["b.mkv"]
 
 
+def test_match_returns_none_for_unknown_source(env):
+    o, _, _ = env
+    assert o.match("magnet:?xt=urn:btih:new") is None
+
+
 def test_resume_or_submit_resumes_pending(env):
     o, _, _ = env
     o.submit("C:/dl", magnet="magnet:?xt=urn:btih:x")
