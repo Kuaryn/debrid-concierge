@@ -79,6 +79,6 @@ def test_create_torrent_file_sends_multipart(tmp_path):
     p = tmp_path / "x.torrent"
     p.write_bytes(b"d8:announce0:e")
     c.create(torrent_path=str(p))
-    name, fh, ctype = seen["files"]["file"]
+    name, _, ctype = seen["files"]["file"]
     assert name == "x.torrent"
     assert ctype == "application/x-bittorrent"

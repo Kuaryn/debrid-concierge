@@ -11,5 +11,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff pytest requests
-      - run: ruff check src tests
+      - run: ruff check src tests repoint.py win_handler.py win_tray.py win_worker.py
       - run: pytest -m "not integration" -v

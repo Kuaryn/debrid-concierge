@@ -4,6 +4,7 @@ import argparse
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from concierge import orchestrator as orch
 from concierge import worker
@@ -11,6 +12,8 @@ from concierge import worker
 # detach flags only exist on windows; tests import this module off-windows
 _DETACH_FLAGS = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
     subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+# path-based entry: registry spawns run pythonw with no PYTHONPATH
+WORKER_ENTRY = Path(__file__).resolve().parents[2] / "win_worker.py"
 
 
 def main(argv=None) -> int:
@@ -25,7 +28,7 @@ def main(argv=None) -> int:
         print("not a magnet and no such file:", a.source)
         return 2
     if a.detach:
-        cmd = [sys.executable, "-m", "concierge.worker", "--source", a.source]
+        cmd = [sys.executable, str(WORKER_ENTRY), "--source", a.source]
         if a.folder:
             cmd += ["--folder", a.folder]
         subprocess.Popen(

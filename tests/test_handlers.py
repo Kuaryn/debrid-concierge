@@ -55,7 +55,7 @@ def test_detach_spawns_worker_and_returns(monkeypatch):
     assert rc == 0
     assert calls == []  # the worker resumes, not this process
     (argv, kw), = spawned
-    assert argv[1:3] == ["-m", "concierge.worker"]
+    assert argv[1].endswith("win_worker.py")
     assert argv[argv.index("--source") + 1] == "magnet:?xt=urn:btih:x"
     assert argv[argv.index("--folder") + 1] == "C:/dl"
     assert kw["creationflags"] == handlers._DETACH_FLAGS
