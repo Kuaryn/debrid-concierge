@@ -34,6 +34,13 @@ class _StubAdm:
         self.handed.append((link, folder, name))
 
 
+class _FailSecond(_StubAdm):
+    def handoff(self, link, folder, name=None, headers=None):
+        if len(self.handed) == 1:
+            raise abdm.AbdmDown("abdm unreachable (ConnectionError)")
+        super().handoff(link, folder, name, headers)
+
+
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     monkeypatch.setattr(orch, "JOBS_FILE", tmp_path / "jobs.json")
@@ -189,3 +196,31 @@ def test_abdm_down_fails_then_retry_hands_all(env):
     o.tick()
     assert j.state == DONE
     assert len(adm.handed) == 2
+
+
+def test_save_failure_leaves_previous_file_intact(env, monkeypatch):
+    o, _, _ = env
+    o.submit("C:/dl", magnet="m")
+    o.save()
+    before = orch.JOBS_FILE.read_text()
+
+    def boom(*a, **k):
+        raise ValueError("bad json")
+
+    monkeypatch.setattr(orch.json, "dumps", boom)
+    with pytest.raises(ValueError):
+        o.save()
+    assert orch.JOBS_FILE.read_text() == before
+
+
+def test_handed_persists_per_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(orch, "JOBS_FILE", tmp_path / "jobs.json")
+    tb = _StubTB()
+    o = Orchestrator(tb=tb, adm=_FailSecond())
+    j = Job(source="m", folder="C:/dl", state=READY, torrent_id=7,
+            files=[{"id": 1, "name": "a.mkv"}, {"id": 2, "name": "b.mkv"}])
+    o.jobs[j.job_id] = j
+    o.tick()
+    assert j.state == FAILED
+    o2 = Orchestrator(tb=tb, adm=_StubAdm())
+    assert o2.jobs[j.job_id].handed == 1  # the first handoff survived the reload

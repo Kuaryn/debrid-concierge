@@ -1,6 +1,7 @@
 """Job state machine: cloud add, poll to completion, per-file hand-off to ABDM."""
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 
@@ -51,8 +52,11 @@ class Orchestrator:
             self.jobs[j.job_id] = j
 
     def save(self):
+        # temp + replace: a crash mid-write must not truncate the real file
         JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        JOBS_FILE.write_text(json.dumps([asdict(j) for j in self.jobs.values()], indent=2))
+        tmp = JOBS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps([asdict(j) for j in self.jobs.values()], indent=2))
+        os.replace(tmp, JOBS_FILE)
 
     def submit(self, folder: str, magnet: str | None = None,
                torrent_path: str | None = None) -> Job:
@@ -134,6 +138,8 @@ class Orchestrator:
                 name = (f.get("name") or "").rsplit("/", 1)[-1]
                 self.adm.handoff(link, j.folder, name=name)
                 j.handed += 1
+                # persist per file: a crash here must not replay handed files
+                self.save()
         except (torbox.TorBoxError, abdm.AbdmError) as e:
             j.state = FAILED
             j.error = str(e)
