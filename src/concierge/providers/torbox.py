@@ -6,7 +6,7 @@ from collections import deque
 
 import requests
 
-BASE = "https://api.torbox.app/v1"
+BASE = "https://api.torbox.app/v1/api"
 
 
 class TorBoxError(Exception):
