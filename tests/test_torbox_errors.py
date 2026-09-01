@@ -74,3 +74,12 @@ def test_parse_rejects_401():
     resp = _fake_response(401, {"detail": "unauthorized"})
     with pytest.raises(torbox.TorBoxError, match="api key"):
         torbox._parse(resp)
+
+
+def test_safe_message_redacts_token():
+    err = requests.RequestException(
+        "Max retries exceeded with url: /v1/torrents/requestdl?token=SECRET123&torrent_id=1 (boom)"
+    )
+    out = torbox._safe_message(err)
+    assert "SECRET123" not in out
+    assert "token=<redacted>" in out

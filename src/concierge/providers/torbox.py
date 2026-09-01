@@ -1,5 +1,6 @@
 """TorBox API client covering the endpoints the concierge actually uses."""
 
+import re
 import time
 from collections import deque
 
@@ -52,6 +53,11 @@ def _parse(resp: requests.Response):
     return payload.get("data", payload)
 
 
+def _safe_message(err: Exception) -> str:
+    # requests error text embeds the raw url; requestdl urls carry the key
+    return re.sub(r"token=[^&\s)]+", "token=<redacted>", str(err))
+
+
 MAX_ADDS_PER_HOUR = 55  # torbox caps uncached adds at 60/hour, leave headroom
 
 
@@ -80,7 +86,7 @@ class TorBoxClient:
                 last_err = TorBoxError(f"torbox http {resp.status_code}")
             except requests.RequestException as e:
                 last_err = e
-        raise TorBoxError(f"torbox unreachable after 3 tries ({last_err})")
+        raise TorBoxError(f"torbox unreachable after 3 tries ({_safe_message(last_err)})")
 
     def _budget_ok(self) -> bool:
         now = time.monotonic()
