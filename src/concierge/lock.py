@@ -18,3 +18,11 @@ def worker_lock():
     finally:
         k32.ReleaseMutex(h)
         k32.CloseHandle(h)
+
+
+def already_running(name: str) -> bool:
+    if os.name != "nt":
+        return False
+    ctypes.windll.kernel32.CreateMutexW(None, False, name)
+    # 183 = ERROR_ALREADY_EXISTS: another process holds this name
+    return ctypes.windll.kernel32.GetLastError() == 183

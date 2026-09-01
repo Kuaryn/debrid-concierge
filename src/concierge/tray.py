@@ -4,6 +4,7 @@ import json
 import threading
 import time
 
+from concierge import lock
 from concierge import orchestrator as orch
 
 POLL = 2.0
@@ -40,6 +41,8 @@ def toast_events(prev: dict, jobs: list[dict]) -> list[tuple[str, str]]:
 
 
 def run() -> None:
+    if lock.already_running("debrid-concierge-tray"):
+        return  # second instance would double every toast
     # pystray and pillow are windows-side deps; keep them out of CI imports
     import pystray
     from PIL import Image, ImageDraw
