@@ -21,6 +21,8 @@ TERMINAL = (DONE, FAILED)
 
 
 def _btih(magnet: str) -> str | None:
+    if "?" not in magnet:
+        return None  # malformed magnet must not crash the recovery path
     for part in magnet.split("?", 1)[1].split("&"):
         if part.startswith("xt=urn:btih:"):
             return part[len("xt=urn:btih:"):].lower()

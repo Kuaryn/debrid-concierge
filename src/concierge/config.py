@@ -52,7 +52,10 @@ def load() -> dict:
 
 def save(cfg: dict) -> None:
     APP_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    # tmp + replace: a crash mid-write must not destroy the config
+    tmp = CONFIG_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2))
+    os.replace(tmp, CONFIG_FILE)
 
 
 def get_torbox_key() -> str | None:

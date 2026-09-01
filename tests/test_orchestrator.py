@@ -200,6 +200,18 @@ def test_submit_ambiguous_create_no_match_fails(env):
     assert j.state == FAILED
 
 
+def test_btih_without_query_returns_none():
+    assert orch._btih("magnet:urn:btih:abc") is None
+
+
+def test_submit_ambiguous_malformed_magnet_fails_without_crash(env):
+    o, tb, _ = env
+    tb.create_raises = True
+    tb.items = [{"hash": "abc", "id": 9}]
+    j = o.submit("C:/dl", magnet="magnet:urn:btih:abc")
+    assert j.state == FAILED  # no btih to reconcile on, so plain failure
+
+
 def test_resume_failed_without_torrent_id_reconciles_before_readd(env):
     o, tb, _ = env
     j = Job(source="magnet:?xt=urn:btih:abc", folder="C:/dl", state=FAILED, error="x")
