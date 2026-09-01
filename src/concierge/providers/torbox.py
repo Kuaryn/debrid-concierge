@@ -68,9 +68,10 @@ class TorBoxClient:
         self.http.headers["Authorization"] = f"Bearer {api_key}"
         self._add_times = deque()
 
-    def _request(self, method: str, path: str, *, params=None, data=None, files=None, json=None):
+    def _request(self, method: str, path: str, *, params=None, data=None, files=None,
+                 json=None, tries: int = 3):
         last_err = None
-        for attempt in range(3):
+        for attempt in range(tries):
             if attempt:
                 time.sleep(2 ** (attempt - 1))
             try:
@@ -86,7 +87,7 @@ class TorBoxClient:
                 last_err = TorBoxError(f"torbox http {resp.status_code}")
             except requests.RequestException as e:
                 last_err = e
-        raise TorBoxError(f"torbox unreachable after 3 tries ({_safe_message(last_err)})")
+        raise TorBoxError(f"torbox unreachable after {tries} tries ({_safe_message(last_err)})")
 
     def _budget_ok(self) -> bool:
         now = time.monotonic()
@@ -130,9 +131,11 @@ class TorBoxClient:
             form["add_only_if_cached"] = "true"
         if magnet:
             form["magnet"] = magnet
-            return self._request("POST", "torrents/createtorrent", data=form)
+            # no retry: a timed-out add may still land; caller reconciles
+            return self._request("POST", "torrents/createtorrent", data=form, tries=1)
         with open(torrent_path, "rb") as fh:
-            return self._request("POST", "torrents/createtorrent", data=form, files={"file": fh})
+            return self._request("POST", "torrents/createtorrent", data=form,
+                                 files={"file": fh}, tries=1)
 
     def control(self, torrent_id: int, operation: str) -> dict:
         # deleting triggers a ~24h account cooldown, hence the warning

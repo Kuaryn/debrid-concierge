@@ -1,3 +1,6 @@
+import pytest
+import requests
+
 from concierge.providers import torbox
 
 
@@ -42,3 +45,18 @@ def test_requestdl_passes_token_in_params():
     assert seen["params"]["token"] == "dummy"
     assert "token" not in seen["url"]
     assert url == "ok"
+
+
+def test_create_does_not_retry_network_failure():
+    # a timed-out add may have landed server-side; retrying would duplicate it
+    c = torbox.TorBoxClient("dummy")
+    calls = []
+
+    def fake(method, url, **kw):
+        calls.append(1)
+        raise requests.ConnectionError("boom")
+
+    c.http.request = fake
+    with pytest.raises(torbox.TorBoxError):
+        c.create(magnet="magnet:?xt=urn:btih:x")
+    assert len(calls) == 1

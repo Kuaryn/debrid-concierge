@@ -3,15 +3,18 @@ import pytest
 from concierge import abdm
 from concierge import orchestrator as orch
 from concierge.orchestrator import CLOUD_PENDING, DONE, FAILED, READY, Job, Orchestrator
-from concierge.providers.torbox import CooldownLimit
+from concierge.providers.torbox import CooldownLimit, TorBoxError
 
 
 class _StubTB:
     def __init__(self):
         self.created = None
         self.items = []
+        self.create_raises = False
 
     def create(self, magnet=None, torrent_path=None, **kw):
+        if self.create_raises:
+            raise TorBoxError("torbox unreachable after 1 tries (timeout)")
         self.created = magnet or torrent_path
         return {"torrent_id": 7}
 
@@ -165,13 +168,43 @@ def test_resume_or_submit_retries_failed_handoff_without_files(env):
     assert got.state == CLOUD_PENDING
 
 
-def test_resume_or_submit_done_job_is_not_resumed(env):
-    o, _, _ = env
+def test_resume_or_submit_done_job_is_returned_not_readded(env):
+    o, tb, _ = env
     j = Job(source="magnet:?xt=urn:btih:x", folder="C:/dl", state=DONE, torrent_id=7)
     o.jobs[j.job_id] = j
     got = o.resume_or_submit("magnet:?xt=urn:btih:x", "C:/dl")
-    assert got is not j
-    assert len(o.jobs) == 2  # sharp edge: a done job re-adds on re-click
+    assert got is j
+    assert len(o.jobs) == 1
+    assert tb.created is None
+
+
+def test_submit_ambiguous_create_adopts_cloud_item(env):
+    o, tb, _ = env
+    tb.create_raises = True
+    tb.items = [{"hash": "ABC", "id": 9}]
+    j = o.submit("C:/dl", magnet="magnet:?xt=urn:btih:abc&dn=x")
+    assert j.state == CLOUD_PENDING
+    assert j.torrent_id == 9
+
+
+def test_submit_ambiguous_create_no_match_fails(env):
+    o, tb, _ = env
+    tb.create_raises = True
+    tb.items = []
+    j = o.submit("C:/dl", magnet="magnet:?xt=urn:btih:abc&dn=x")
+    assert j.state == FAILED
+
+
+def test_resume_failed_without_torrent_id_reconciles_before_readd(env):
+    o, tb, _ = env
+    j = Job(source="magnet:?xt=urn:btih:abc", folder="C:/dl", state=FAILED, error="x")
+    o.jobs[j.job_id] = j
+    tb.items = [{"hash": "abc", "id": 9}]
+    got = o.resume_or_submit("magnet:?xt=urn:btih:abc", "C:/dl")
+    assert got is j
+    assert got.state == CLOUD_PENDING
+    assert got.torrent_id == 9
+    assert tb.created is None
 
 
 def test_resume_or_submit_torrent_path(env, tmp_path):

@@ -20,6 +20,13 @@ POLL_DELTAS = (0, 5, 25)  # polls land at 0s/5s/30s, then every 10s
 TERMINAL = (DONE, FAILED)
 
 
+def _btih(magnet: str) -> str | None:
+    for part in magnet.split("?", 1)[1].split("&"):
+        if part.startswith("xt=urn:btih:"):
+            return part[len("xt=urn:btih:"):].lower()
+    return None
+
+
 @dataclass
 class Job:
     source: str
@@ -66,8 +73,11 @@ class Orchestrator:
         try:
             data = self.tb.create(magnet=magnet, torrent_path=torrent_path)
         except torbox.TorBoxError as e:
-            j.state = FAILED
-            j.error = str(e)
+            if magnet and self._reconcile(j, magnet):
+                j.state = CLOUD_PENDING
+            else:
+                j.state = FAILED
+                j.error = str(e)
             self.save()
             return j
         j.torrent_id = data.get("torrent_id") if isinstance(data, dict) else None
@@ -83,25 +93,57 @@ class Orchestrator:
         # a re-click of the same source must resume, never double-add
         job = next(
             (j for j in self.jobs.values()
-             if j.source == source and j.state not in (DONE, FAILED)),
+             if j.source == source and j.state not in TERMINAL),
             None,
         )
         if job is None:
-            # a failed hand-off with a live torrent_id retries; only a failed add re-adds
             job = next(
                 (j for j in self.jobs.values()
-                 if j.source == source and j.state == FAILED and j.torrent_id),
+                 if j.source == source and j.state == FAILED),
                 None,
             )
             if job is not None:
-                job.state = READY if job.files else CLOUD_PENDING
-                job.error = None
+                if job.torrent_id:
+                    # a failed hand-off with a live torrent_id retries
+                    job.state = READY if job.files else CLOUD_PENDING
+                elif source.startswith("magnet:") and self._reconcile(job, source):
+                    job.state = CLOUD_PENDING
+                else:
+                    # the add never landed server-side; a fresh submit is safe
+                    job = None
+                if job is not None:
+                    job.error = None
+        if job is None:
+            # a done job is returned as-is: re-adding would land a duplicate
+            # cloud item that torbox cooldowns us for deleting
+            job = next(
+                (j for j in self.jobs.values()
+                 if j.source == source and j.state == DONE),
+                None,
+            )
         if job is None:
             if source.startswith("magnet:"):
                 job = self.submit(folder, magnet=source)
             else:
                 job = self.submit(folder, torrent_path=source)
         return job
+
+    def _reconcile(self, j: Job, magnet: str) -> bool:
+        # a timed-out add may have landed: adopt the cloud item by infohash
+        btih = _btih(magnet)
+        if not btih:
+            return False
+        try:
+            items = self.tb.mylist()
+        except torbox.TorBoxError:
+            return False
+        if isinstance(items, dict):
+            items = [items]
+        for it in items:
+            if (it.get("hash") or "").lower() == btih:
+                j.torrent_id = it.get("id")
+                return True
+        return False
 
     def next_delay(self, j: Job) -> int:
         return POLL_DELTAS[j.polls] if j.polls < len(POLL_DELTAS) else 10
