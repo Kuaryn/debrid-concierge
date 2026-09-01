@@ -92,6 +92,8 @@ class Orchestrator:
         except torbox.TorBoxError as e:
             j.error = str(e)  # transient; stay pending, keep last error for surfacing
             return
+        if isinstance(items, dict):  # mylist?id= returns the object, not a list
+            items = [items]
         it = items[0] if items else None
         if not it:
             return
@@ -104,7 +106,9 @@ class Orchestrator:
         try:
             for f in j.files[j.handed:]:
                 link = self.tb.requestdl(j.torrent_id, f["id"])
-                self.adm.handoff(link, j.folder, name=f.get("name"))
+                # abdm rejects '/' in names; torbox nests subfolders in them
+                name = (f.get("name") or "").rsplit("/", 1)[-1]
+                self.adm.handoff(link, j.folder, name=name)
                 j.handed += 1
         except (torbox.TorBoxError, abdm.AbdmError) as e:
             j.state = FAILED

@@ -70,6 +70,14 @@ def test_poll_incomplete_stays_pending(env):
     assert j.polls == 1
 
 
+def test_poll_handles_dict_response(env):
+    o, tb, _ = env
+    j = o.submit("C:/dl", magnet="m")
+    tb.items = {"progress": 1, "download_finished": True, "files": [{"id": 1, "name": "a.mkv"}]}
+    o.tick()
+    assert j.state == READY
+
+
 def test_multifile_poll_then_handoff(env):
     o, tb, adm = env
     j = o.submit("C:/dl", magnet="m")
@@ -81,6 +89,16 @@ def test_multifile_poll_then_handoff(env):
     assert j.state == DONE
     assert [h[2] for h in adm.handed] == ["a.mkv", "b.mkv"]
     assert all(h[1] == "C:/dl" for h in adm.handed)
+
+
+def test_handoff_strips_subfolder_from_name(env):
+    o, _, adm = env
+    j = Job(source="m", folder="C:/dl", state=READY, torrent_id=7,
+            files=[{"id": 1, "name": "Big Buck Bunny/Big Buck Bunny.en.srt"}])
+    o.jobs[j.job_id] = j
+    o.tick()
+    assert j.state == DONE
+    assert adm.handed[0][2] == "Big Buck Bunny.en.srt"
 
 
 def test_next_delay_schedule(env):
