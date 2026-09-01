@@ -137,6 +137,17 @@ class TorBoxClient:
             return self._request("POST", "torrents/createtorrent", data=form,
                                  files={"file": fh}, tries=1)
 
+    def magnettofile(self, magnet: str) -> bytes:
+        # conversion only, adds nothing to the cloud; raw bencode, not the
+        # usual {success, data} envelope
+        resp = self.http.request(
+            "POST", BASE + "/torrents/magnettofile",
+            json={"magnet": magnet}, timeout=15,
+        )
+        if resp.status_code != 200:
+            raise TorBoxError(f"magnettofile http {resp.status_code}")
+        return resp.content
+
     def control(self, torrent_id: int, operation: str) -> dict:
         # deleting triggers a ~24h account cooldown, hence the warning
         return self._request(

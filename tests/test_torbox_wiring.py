@@ -60,3 +60,23 @@ def test_create_does_not_retry_network_failure():
     with pytest.raises(torbox.TorBoxError):
         c.create(magnet="magnet:?xt=urn:btih:x")
     assert len(calls) == 1
+
+
+def test_magnettofile_returns_raw_bytes():
+    c = torbox.TorBoxClient("dummy")
+
+    class _Raw:
+        status_code = 200
+        content = b"d8:announce0:e"
+
+    c.http.request = lambda method, url, **kw: _Raw()
+    assert c.magnettofile("magnet:?xt=urn:btih:x") == b"d8:announce0:e"
+
+
+def test_create_torrent_file_sends_multipart(tmp_path):
+    c = torbox.TorBoxClient("dummy")
+    seen = _capture(c)
+    p = tmp_path / "x.torrent"
+    p.write_bytes(b"d8:announce0:e")
+    c.create(torrent_path=str(p))
+    assert seen["files"]["file"].name == str(p)
