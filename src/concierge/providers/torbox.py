@@ -68,7 +68,7 @@ class TorBoxClient:
         self.http.headers["Authorization"] = f"Bearer {api_key}"
         self._add_times = deque()
 
-    def _request(self, method: str, path: str, *, params=None, data=None, files=None):
+    def _request(self, method: str, path: str, *, params=None, data=None, files=None, json=None):
         last_err = None
         for attempt in range(3):
             if attempt:
@@ -79,7 +79,7 @@ class TorBoxClient:
                         fh.seek(0)  # multipart handles need rewinding between tries
                 resp = self.http.request(
                     method, BASE + "/" + path,
-                    params=params, data=data, files=files, timeout=15,
+                    params=params, data=data, files=files, json=json, timeout=15,
                 )
                 if resp.status_code < 500:
                     return _parse(resp)
@@ -121,6 +121,7 @@ class TorBoxClient:
                add_only_if_cached: bool = False) -> dict:
         if not self._budget_ok():
             raise TorBoxError("add budget spent (55 adds in the past hour)")
+        # count attempts, not successes: a timed-out add may still land server-side
         self._add_times.append(time.monotonic())
         form = {"seed": str(seed)}
         if as_queued:
