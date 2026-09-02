@@ -14,6 +14,13 @@ _DETACH_FLAGS = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
     subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 # path-based entry: registry spawns run pythonw with no PYTHONPATH
 WORKER_ENTRY = Path(__file__).resolve().parents[2] / "win_worker.py"
+WORKER_EXE = "debrid-concierge-worker.exe"
+
+
+def _worker_command(source: str) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [str(Path(sys.executable).with_name(WORKER_EXE)), "--source", source]
+    return [sys.executable, str(WORKER_ENTRY), "--source", source]
 
 
 def main(argv=None) -> int:
@@ -28,13 +35,19 @@ def main(argv=None) -> int:
         print("not a magnet and no such file:", a.source)
         return 2
     if a.detach:
-        cmd = [sys.executable, str(WORKER_ENTRY), "--source", a.source]
+        cmd = _worker_command(a.source)
         if a.folder:
             cmd += ["--folder", a.folder]
+        env = None
+        if getattr(sys, "frozen", False):
+            env = os.environ.copy()
+            # I reset the bootloader state because this worker outlives its handler
+            env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
         subprocess.Popen(
             cmd,
             creationflags=_DETACH_FLAGS,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=env,
         )
         print("spawned worker for", a.source)
         return 0

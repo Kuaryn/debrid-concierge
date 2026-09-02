@@ -5,6 +5,9 @@ description = "hands torbox cloud results to a local download manager"
 requires-python = ">=3.12"
 dependencies = ["requests", "pystray"]
 
+[project.optional-dependencies]
+build = ["pyinstaller==6.22.2"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 markers = ["integration: live torbox calls, skipped without a key"]

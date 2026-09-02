@@ -7,8 +7,9 @@ torrent client, no peer traffic, nothing for a campus or office network to
 complain about.
 
 Status: works on my machine. One Windows install, my own TorBox and ABDM
-setup, no packaging yet (needs a Python install to run). Treat it as a
-working prototype, not a product.
+setup. The repo builds a self-contained Windows folder, but there is no
+installer or signed release yet. Treat it as a working prototype, not a
+product.
 
 ## What happens on a click
 
@@ -62,7 +63,7 @@ query parameter, so error text gets redacted before it reaches the job log.
 - `repoint.py` — writes the HKCU registry keys: magnet handler, .torrent
   ProgID, tray autostart
 
-## Setup
+## Install
 
 Python 3.12+, then `pip install requests pystray`. Store the TorBox key
 (prompted, never echoed):
@@ -75,6 +76,15 @@ Point Windows at the app:
 
 Then pick "Debrid Concierge" once in Open With for .torrent files; Windows
 will not let a script set that default for you.
+
+To build the Windows folder with Python 3.14:
+
+    python -m pip install ".[build]"
+    python -m PyInstaller --clean --noconfirm packaging/debrid-concierge.spec
+    python repoint.py --package-dir dist/debrid-concierge
+
+The three executables land in `dist/debrid-concierge`. The folder must stay
+at the path recorded by the last command.
 
 ## Tests
 

@@ -59,6 +59,26 @@ def test_detach_spawns_worker_and_returns(monkeypatch):
     assert argv[argv.index("--source") + 1] == "magnet:?xt=urn:btih:x"
     assert argv[argv.index("--folder") + 1] == "C:/dl"
     assert kw["creationflags"] == handlers._DETACH_FLAGS
+    assert kw["stdin"] == subprocess.DEVNULL
+    assert kw["env"] is None
+
+
+def test_detach_uses_packaged_worker(monkeypatch):
+    spawned = []
+
+    class _FakePopen:
+        def __init__(self, argv, **kw):
+            spawned.append((argv, kw))
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(handlers.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        handlers.sys, "executable", r"C:\Apps\concierge\debrid-concierge-handler.exe")
+    rc = handlers.main(["magnet:?xt=urn:btih:x", "--detach"])
+    assert rc == 0
+    (argv, kw), = spawned
+    assert argv[0] == r"C:\Apps\concierge\debrid-concierge-worker.exe"
+    assert kw["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
 
 
 def test_detach_missing_file_still_exit_two(monkeypatch, tmp_path):
