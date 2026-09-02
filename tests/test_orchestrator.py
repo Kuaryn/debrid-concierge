@@ -2,7 +2,7 @@ import pytest
 
 from concierge import abdm
 from concierge import orchestrator as orch
-from concierge.orchestrator import CLOUD_PENDING, DONE, FAILED, READY, Job, Orchestrator
+from concierge.orchestrator import CLOUD_PENDING, DONE, FAILED, READY, RECEIVED, Job, Orchestrator
 from concierge.providers.torbox import CooldownLimit, TorBoxError
 
 
@@ -274,3 +274,24 @@ def test_handed_persists_per_file(monkeypatch, tmp_path):
     assert j.state == FAILED
     o2 = Orchestrator(tb=tb, adm=_StubAdm())
     assert o2.jobs[j.job_id].handed == 1  # the first handoff survived the reload
+
+
+def test_save_prunes_old_finished_jobs_but_keeps_active_ones(env):
+    o, _, _ = env
+    done_ids = []
+    for i in range(orch.KEEP_TERMINAL + 3):
+        j = Job(source=f"magnet:{i}", folder="C:/dl", state=DONE)
+        o.jobs[j.job_id] = j
+        done_ids.append(j.job_id)
+    active = Job(source="magnet:running", folder="C:/dl", state=RECEIVED)
+    o.jobs[active.job_id] = active
+
+    o.save()
+
+    assert len(o.jobs) == orch.KEEP_TERMINAL + 1
+    assert active.job_id in o.jobs
+    # insertion order is the only recency signal; the oldest go first
+    for jid in done_ids[:3]:
+        assert jid not in o.jobs
+    for jid in done_ids[3:]:
+        assert jid in o.jobs

@@ -18,6 +18,7 @@ FAILED = "failed"
 
 POLL_DELTAS = (0, 5, 25)  # polls land at 0s/5s/30s, then every 10s
 TERMINAL = (DONE, FAILED)
+KEEP_TERMINAL = 20  # finished jobs double as click-dedupe, keep the newest 20
 
 
 def _btih(magnet: str) -> str | None:
@@ -61,7 +62,15 @@ class Orchestrator:
                 j.state = CLOUD_PENDING if j.torrent_id else RECEIVED
             self.jobs[j.job_id] = j
 
+    def _prune(self):
+        terminal = [j for j in self.jobs.values() if j.state in TERMINAL]
+        excess = len(terminal) - KEEP_TERMINAL
+        if excess > 0:
+            for j in terminal[:excess]:
+                del self.jobs[j.job_id]
+
     def save(self):
+        self._prune()
         # temp + replace: a crash mid-write must not truncate the real file
         JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = JOBS_FILE.with_suffix(".tmp")
