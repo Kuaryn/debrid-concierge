@@ -63,7 +63,7 @@ def test_detach_spawns_worker_and_returns(monkeypatch):
     assert kw["env"] is None
 
 
-def test_detach_uses_packaged_worker(monkeypatch):
+def test_detach_uses_packaged_worker(monkeypatch, tmp_path):
     spawned = []
 
     class _FakePopen:
@@ -72,12 +72,13 @@ def test_detach_uses_packaged_worker(monkeypatch):
 
     monkeypatch.setattr(subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(handlers.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(
-        handlers.sys, "executable", r"C:\Apps\concierge\debrid-concierge-handler.exe")
+    package_dir = tmp_path / "concierge"
+    handler_exe = package_dir / "debrid-concierge-handler.exe"
+    monkeypatch.setattr(handlers.sys, "executable", str(handler_exe))
     rc = handlers.main(["magnet:?xt=urn:btih:x", "--detach"])
     assert rc == 0
     (argv, kw), = spawned
-    assert argv[0] == r"C:\Apps\concierge\debrid-concierge-worker.exe"
+    assert argv[0] == str(package_dir / "debrid-concierge-worker.exe")
     assert kw["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
 
 
