@@ -1,7 +1,8 @@
+import os
+
 import pytest
 import requests
 
-from concierge import config
 from concierge.providers import torbox
 
 HASH = "5b1e0d988fc7a0c9e99bd852071681a59974b39f"
@@ -11,9 +12,9 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(scope="module")
 def client():
-    key = config.get_torbox_key()
-    if key is None:
-        pytest.skip("set key first: python src/concierge/config.py set-key")
+    key = os.environ.get("DEBRID_CONCIERGE_TEST_KEY")
+    if not key:
+        pytest.skip("DEBRID_CONCIERGE_TEST_KEY is not set")
     return torbox.TorBoxClient(key)
 
 
@@ -35,7 +36,11 @@ def test_mylist_returns_items(client):
 def test_requestdl_streams_first_byte(client):
     item = client.mylist()[0]
     url = client.requestdl(item["id"], item["files"][0]["id"])
-    # url carries the api key in the query string; never print or log it
-    resp = requests.get(url, headers={"Range": "bytes=0-0"}, stream=True, timeout=15)
-    assert resp.status_code in (200, 206)
-    resp.close()
+    try:
+        resp = requests.get(url, headers={"Range": "bytes=0-0"}, stream=True, timeout=15)
+    except requests.RequestException as e:
+        raise AssertionError(f"cdn range probe failed ({e.__class__.__name__})") from None
+    try:
+        assert resp.status_code in (200, 206)
+    finally:
+        resp.close()

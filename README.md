@@ -92,7 +92,8 @@ at the path recorded by the last command.
     python -m pytest -q -m "not integration"
 
 The integration marker adds four read-only smoke tests against the real
-TorBox API using your stored key:
+TorBox API. They skip unless `DEBRID_CONCIERGE_TEST_KEY` is set in the test
+process environment:
 
     python -m pytest -m integration -v
 

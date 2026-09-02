@@ -29,7 +29,7 @@ def _read_settings() -> dict:
 
 class AbdmClient:
     def __init__(self, key: str | None = None, port: int | None = None):
-        cfg = _read_settings()
+        cfg = {} if key is not None and port is not None else _read_settings()
         self.key = key if key is not None else cfg.get("apiAuthKey")
         self.base = f"http://localhost:{port or cfg.get('apiPort') or 15151}"
 

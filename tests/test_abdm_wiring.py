@@ -34,6 +34,16 @@ def test_handoff_sends_startdownload_true(monkeypatch):
     assert body["downloadSource"] == {"type": "http", "link": "https://cdn.example/file.mkv"}
 
 
+def test_explicit_connection_skips_settings(monkeypatch):
+    def fail():
+        raise AssertionError("settings must not be read")
+
+    monkeypatch.setattr(abdm, "_read_settings", fail)
+    c = abdm.AbdmClient(key="dummy", port=15151)
+    assert c.key == "dummy"
+    assert c.base == "http://localhost:15151"
+
+
 def test_ping_posts_to_ping(monkeypatch):
     seen = _capture(monkeypatch)
     c = abdm.AbdmClient(key="dummy")
