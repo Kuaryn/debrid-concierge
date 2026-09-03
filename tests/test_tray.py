@@ -49,3 +49,9 @@ def test_load_jobs_reads_file(monkeypatch, tmp_path):
     (tmp_path / "jobs.json").write_text('[{"job_id": "a", "state": "done"}]')
     monkeypatch.setattr(orch, "JOBS_FILE", tmp_path / "jobs.json")
     assert tray.load_jobs() == [{"job_id": "a", "state": "done"}]
+
+
+def test_load_jobs_ignores_wrong_root(monkeypatch, tmp_path):
+    (tmp_path / "jobs.json").write_text("7")
+    monkeypatch.setattr(orch, "JOBS_FILE", tmp_path / "jobs.json")
+    assert tray.load_jobs() == []

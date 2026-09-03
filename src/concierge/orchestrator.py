@@ -1,6 +1,7 @@
 """Job state machine: cloud add, poll to completion, per-file hand-off to ABDM."""
 
 import json
+import math
 import os
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -63,27 +64,83 @@ class Job:
     job_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
 
 
+def _load_job(value) -> Job | None:
+    if not isinstance(value, dict) or any(k not in Job.__dataclass_fields__ for k in value):
+        return None
+    try:
+        job = Job(**value)
+    except TypeError:
+        return None
+    if (not isinstance(job.source, str) or not job.source
+            or not isinstance(job.folder, str) or not job.folder
+            or not isinstance(job.state, str)
+            or job.state not in {RECEIVED, CLOUD_PENDING, READY, DONE, FAILED}
+            or not isinstance(job.job_id, str) or not job.job_id):
+        return None
+    if job.torrent_id is not None and (type(job.torrent_id) is not int or job.torrent_id <= 0):
+        return None
+    if not isinstance(job.files, list) or any(not isinstance(f, dict) for f in job.files):
+        return None
+    counts = (job.handed, job.polls, job.poll_errors, job.missing_polls)
+    if any(type(n) is not int or n < 0 for n in counts) or job.handed > len(job.files):
+        return None
+    if (isinstance(job.next_poll_at, bool) or not isinstance(job.next_poll_at, (int, float))
+            or not math.isfinite(job.next_poll_at) or job.next_poll_at < 0):
+        return None
+    if job.error is not None and not isinstance(job.error, str):
+        return None
+    if job.state == CLOUD_PENDING and job.torrent_id is None:
+        return None
+    if job.state == RECEIVED:
+        if job.torrent_id is None:
+            return None
+        job.state = CLOUD_PENDING
+    return job
+
+
+class JobsError(Exception):
+    pass
+
+
 class Orchestrator:
     def __init__(self, tb=None, adm=None):
         self.tb = tb if tb is not None else torbox.TorBoxClient(config.get_torbox_key())
         self.adm = adm if adm is not None else abdm.AbdmClient()
         self.jobs = {}
-        self.reload()
+        self.load_warning = self.reload()
 
     def reload(self):
         self.jobs.clear()
-        self._load()
+        self.load_warning = self._load()
+        return self.load_warning
 
     def _load(self):
         try:
-            raw = json.loads(JOBS_FILE.read_text())
-        except (OSError, ValueError):
-            return
-        for d in raw:
-            j = Job(**d)
-            if j.state == RECEIVED and j.torrent_id:
-                j.state = CLOUD_PENDING
-            self.jobs[j.job_id] = j
+            text = JOBS_FILE.read_text()
+        except FileNotFoundError:
+            return None
+        except (OSError, UnicodeError):
+            raise JobsError("saved jobs could not be read") from None
+        try:
+            raw = json.loads(text)
+        except ValueError:
+            raw = None
+        rejected = not isinstance(raw, list)
+        if isinstance(raw, list):
+            for value in raw:
+                job = _load_job(value)
+                if job is None or job.job_id in self.jobs:
+                    rejected = True
+                    continue
+                self.jobs[job.job_id] = job
+        if not rejected:
+            return None
+        try:
+            backup = config.preserve_bad(JOBS_FILE)
+        except OSError:
+            raise JobsError("invalid jobs file could not be preserved") from None
+        self.save()
+        return f"Some saved jobs were invalid. The original is in {backup.name}."
 
     def _prune(self):
         terminal = [j for j in self.jobs.values() if j.state in TERMINAL]

@@ -1,4 +1,4 @@
-from concierge import lock, worker
+from concierge import config, lock, worker
 from concierge import orchestrator as orch
 
 
@@ -173,3 +173,48 @@ def test_existing_job_skips_dialog(monkeypatch):
     fake = _FakeOrch({"m": [orch.CLOUD_PENDING, orch.DONE]})
     job = worker.run("m", None, o=fake)
     assert job.state == orch.DONE
+
+
+def test_config_error_is_shown(monkeypatch):
+    shown = []
+
+    def broken_orchestrator():
+        raise config.ConfigError("config file is invalid")
+
+    monkeypatch.setattr(orch, "Orchestrator", broken_orchestrator)
+    monkeypatch.setattr(worker.dialog, "show_error", shown.append)
+
+    job = worker.run("m", "C:/dl")
+
+    assert job.state == orch.FAILED
+    assert job.error == "config file is invalid"
+    assert shown == ["config file is invalid"]
+
+
+def test_jobs_warning_is_shown_outside_lock(monkeypatch):
+    held = False
+    shown = []
+
+    class _TrackedLock:
+        def __enter__(self):
+            nonlocal held
+            held = True
+
+        def __exit__(self, *exc):
+            nonlocal held
+            held = False
+
+    fake = _FakeOrch({"m": [orch.DONE]})
+    fake.load_warning = "Some saved jobs were invalid. The original is in jobs.json.bad."
+
+    def show(message):
+        assert not held
+        shown.append(message)
+
+    monkeypatch.setattr(worker.lock, "worker_lock", _TrackedLock)
+    monkeypatch.setattr(worker.dialog, "show_error", show)
+
+    job = worker.run("m", "C:/dl", o=fake)
+
+    assert job.state == orch.DONE
+    assert shown == [fake.load_warning]

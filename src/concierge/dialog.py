@@ -28,3 +28,15 @@ def ask_folder(initial: str | None = None) -> str | None:
             initialdir=initial) or None
     finally:
         root.destroy()
+
+
+def show_error(message: str) -> None:
+    import tkinter
+    from tkinter import messagebox
+    _dpi_aware()
+    root = tkinter.Tk()
+    root.withdraw()
+    try:
+        messagebox.showerror("Debrid Concierge", message, parent=root)
+    finally:
+        root.destroy()

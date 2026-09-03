@@ -16,6 +16,8 @@ def load_jobs() -> list[dict]:
         raw = json.loads(orch.JOBS_FILE.read_text())
     except (OSError, ValueError):
         return []
+    if not isinstance(raw, list):
+        return []
     return [j for j in raw if isinstance(j, dict)]
 
 

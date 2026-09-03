@@ -1,6 +1,7 @@
 """Config storage. Secrets are DPAPI-encrypted before they touch disk."""
 
 import base64
+import binascii
 import ctypes
 import ctypes.wintypes
 import getpass
@@ -14,6 +15,10 @@ APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "debrid-concierge"
 CONFIG_FILE = APP_DIR / "config.json"
 
 DEFAULTS = {"torbox_key_enc": None, "last_folder": None}
+
+
+class ConfigError(Exception):
+    pass
 
 
 class DATA_BLOB(ctypes.Structure):
@@ -40,11 +45,47 @@ def _dpapi(data: bytes, encrypt: bool) -> bytes:
         ctypes.windll.kernel32.LocalFree(blob_out.pbData)
 
 
+def preserve_bad(path: Path) -> Path:
+    data = path.read_bytes()
+    base = path.with_name(path.name + ".bad")
+    number = 0
+    while True:
+        candidate = base if number == 0 else base.with_name(base.name + f".{number}")
+        try:
+            with candidate.open("xb") as fh:
+                fh.write(data)
+            break
+        except FileExistsError:
+            number += 1
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    return candidate
+
+
+def _invalid_config() -> None:
+    try:
+        backup = preserve_bad(CONFIG_FILE)
+    except OSError:
+        raise ConfigError("config file is invalid and could not be preserved") from None
+    raise ConfigError(f"config file is invalid; the original is in {backup.name}")
+
+
 def load() -> dict:
     try:
-        raw = json.loads(CONFIG_FILE.read_text())
+        text = CONFIG_FILE.read_text()
     except FileNotFoundError:
         return dict(DEFAULTS)
+    except (OSError, UnicodeError):
+        raise ConfigError("config file could not be read") from None
+    try:
+        raw = json.loads(text)
+    except ValueError:
+        _invalid_config()
+    if (not isinstance(raw, dict) or any(k not in DEFAULTS for k in raw)
+            or any(v is not None and not isinstance(v, str) for v in raw.values())):
+        _invalid_config()
     cfg = dict(DEFAULTS)
     cfg.update(raw)
     return cfg
@@ -62,13 +103,23 @@ def get_torbox_key() -> str | None:
     enc = load()["torbox_key_enc"]
     if not enc:
         return None
-    return _dpapi(base64.b64decode(enc), encrypt=False).decode()
+    try:
+        encrypted = base64.b64decode(enc, validate=True)
+        key = _dpapi(encrypted, encrypt=False).decode()
+    except (binascii.Error, OSError, UnicodeError, ValueError):
+        raise ConfigError("TorBox key is missing or invalid; save it again") from None
+    return key or None
 
 
 def set_torbox_key(key: str) -> None:
     # dpapi returns raw bytes; base64 to survive json
     enc = base64.b64encode(_dpapi(key.encode(), encrypt=True)).decode()
-    cfg = load()
+    try:
+        cfg = load()
+    except ConfigError:
+        if CONFIG_FILE.exists():
+            raise
+        cfg = dict(DEFAULTS)
     cfg["torbox_key_enc"] = enc
     save(cfg)
 

@@ -265,6 +265,66 @@ def test_old_job_gets_poll_defaults(env):
     assert job.missing_polls == 0
 
 
+def test_broken_jobs_file_is_preserved_and_repaired(env):
+    _, tb, adm = env
+    orch.JOBS_FILE.write_text("{")
+
+    loaded = Orchestrator(tb=tb, adm=adm)
+
+    assert loaded.jobs == {}
+    assert loaded.load_warning == "Some saved jobs were invalid. The original is in jobs.json.bad."
+    assert orch.JOBS_FILE.read_text() == "[]"
+    assert orch.JOBS_FILE.with_name("jobs.json.bad").read_text() == "{"
+
+
+def test_jobs_root_must_be_a_list(env):
+    _, tb, adm = env
+    orch.JOBS_FILE.write_text('{}')
+
+    loaded = Orchestrator(tb=tb, adm=adm)
+
+    assert loaded.jobs == {}
+    assert loaded.load_warning is not None
+
+
+def test_mixed_jobs_keep_valid_records(env):
+    _, tb, adm = env
+    valid = {"source": "m", "folder": "C:/dl", "state": CLOUD_PENDING,
+             "torrent_id": 7, "job_id": "kept"}
+    original = json.dumps([valid, 4, {"source": "missing folder"},
+                           {**valid, "job_id": "unknown", "extra": True},
+                           {**valid, "job_id": "bad type", "polls": "1"}])
+    orch.JOBS_FILE.write_text(original)
+
+    loaded = Orchestrator(tb=tb, adm=adm)
+
+    assert list(loaded.jobs) == ["kept"]
+    assert json.loads(orch.JOBS_FILE.read_text())[0]["job_id"] == "kept"
+    assert orch.JOBS_FILE.with_name("jobs.json.bad").read_text() == original
+
+
+def test_jobs_backup_is_not_overwritten(env):
+    _, tb, adm = env
+    orch.JOBS_FILE.write_text("[]x")
+    orch.JOBS_FILE.with_name("jobs.json.bad").write_text("older")
+
+    loaded = Orchestrator(tb=tb, adm=adm)
+
+    assert loaded.load_warning.endswith("jobs.json.bad.1.")
+    assert orch.JOBS_FILE.with_name("jobs.json.bad").read_text() == "older"
+    assert orch.JOBS_FILE.with_name("jobs.json.bad.1").read_text() == "[]x"
+
+
+def test_bad_state_type_is_rejected(env):
+    _, tb, adm = env
+    orch.JOBS_FILE.write_text(json.dumps([{"source": "m", "folder": "C:/dl", "state": []}]))
+
+    loaded = Orchestrator(tb=tb, adm=adm)
+
+    assert loaded.jobs == {}
+    assert loaded.load_warning is not None
+
+
 def test_retry_after_partial_handoff(env):
     o, _, adm = env
     j = Job(source="m", folder="C:/dl", state=READY, torrent_id=7,
