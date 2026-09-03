@@ -9,7 +9,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from urllib.parse import parse_qsl, urlsplit
 
-from concierge import abdm, config
+from concierge import abdm, config, torrent
 from concierge.providers import torbox
 
 JOBS_FILE = config.APP_DIR / "jobs.json"
@@ -60,9 +60,9 @@ def _btih(magnet: str) -> str | None:
     return None
 
 
-def _same_source(saved: str, source: str) -> bool:
-    saved_btih = _btih(saved)
-    source_btih = _btih(source)
+def _same_source(saved: str, source: str, saved_hash=None, source_hash=None) -> bool:
+    saved_btih = saved_hash or _btih(saved)
+    source_btih = source_hash or _btih(source)
     if saved_btih is not None and source_btih is not None:
         return saved_btih == source_btih
     return saved == source
@@ -95,6 +95,7 @@ class Job:
     missing_polls: int = 0
     error: str | None = None
     job_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    infohash: str | None = None
 
 
 def _load_job(value) -> Job | None:
@@ -122,6 +123,10 @@ def _load_job(value) -> Job | None:
         return None
     if job.error is not None and not isinstance(job.error, str):
         return None
+    if job.infohash is not None:
+        job.infohash = _normalize_btih(job.infohash)
+        if job.infohash is None:
+            return None
     if job.state == CLOUD_PENDING and job.torrent_id is None:
         return None
     if job.state == RECEIVED:
@@ -191,13 +196,25 @@ class Orchestrator:
         os.replace(tmp, JOBS_FILE)
 
     def submit(self, folder: str, magnet: str | None = None,
-               torrent_path: str | None = None) -> Job:
+               torrent_path: str | None = None, infohash: str | None = None) -> Job:
         j = Job(source=magnet or str(torrent_path), folder=folder)
         self.jobs[j.job_id] = j
+        if magnet:
+            j.infohash = _btih(magnet)
+        elif torrent_path:
+            try:
+                j.infohash = _normalize_btih(infohash) if infohash else torrent.file_infohash(torrent_path)
+                if j.infohash is None:
+                    raise torrent.TorrentError("invalid torrent infohash")
+            except torrent.TorrentError as e:
+                j.state = FAILED
+                j.error = str(e)
+                self.save()
+                return j
         try:
             data = self.tb.create(magnet=magnet, torrent_path=torrent_path)
         except torbox.TorBoxError as e:
-            if magnet and self._reconcile(j, magnet):
+            if j.infohash and self._reconcile(j, j.infohash):
                 j.state = CLOUD_PENDING
             else:
                 j.state = FAILED
@@ -215,25 +232,33 @@ class Orchestrator:
 
     def resume_or_submit(self, source: str, folder: str) -> Job:
         # a re-click of the same source must resume, never double-add
-        job = self.match(source)
+        infohash = _btih(source)
+        if not source.startswith("magnet:"):
+            try:
+                infohash = torrent.file_infohash(source)
+            except torrent.TorrentError:
+                return self.submit(folder, torrent_path=source)
+        job = self.match(source, infohash)
         if job is None:
             if source.startswith("magnet:"):
                 job = self.submit(folder, magnet=source)
             else:
-                job = self.submit(folder, torrent_path=source)
+                job = self.submit(folder, torrent_path=source, infohash=infohash)
         return job
 
-    def match(self, source: str) -> Job | None:
+    def match(self, source: str, infohash: str | None = None) -> Job | None:
         # the job this source would resume, or None if a fresh add is needed
         job = next(
             (j for j in self.jobs.values()
-             if _same_source(j.source, source) and j.state not in TERMINAL),
+             if _same_source(j.source, source, j.infohash, infohash)
+             and j.state not in TERMINAL),
             None,
         )
         if job is None:
             job = next(
                 (j for j in self.jobs.values()
-                 if _same_source(j.source, source) and j.state == FAILED),
+                 if _same_source(j.source, source, j.infohash, infohash)
+                 and j.state == FAILED),
                 None,
             )
             if job is not None:
@@ -243,7 +268,8 @@ class Orchestrator:
                     job.next_poll_at = 0
                     job.poll_errors = 0
                     job.missing_polls = 0
-                elif source.startswith("magnet:") and self._reconcile(job, source):
+                elif (job.infohash or infohash) and self._reconcile(
+                        job, job.infohash or infohash):
                     job.state = CLOUD_PENDING
                 else:
                     # the add never landed server-side; a fresh submit is safe
@@ -255,16 +281,14 @@ class Orchestrator:
             # cloud item that torbox cooldowns us for deleting
             job = next(
                 (j for j in self.jobs.values()
-                 if _same_source(j.source, source) and j.state == DONE),
+                 if _same_source(j.source, source, j.infohash, infohash)
+                 and j.state == DONE),
                 None,
             )
         return job
 
-    def _reconcile(self, j: Job, magnet: str) -> bool:
+    def _reconcile(self, j: Job, infohash: str) -> bool:
         # a timed-out add may have landed: adopt the cloud item by infohash
-        btih = _btih(magnet)
-        if not btih:
-            return False
         try:
             items = self.tb.mylist()
         except torbox.TorBoxError:
@@ -272,7 +296,7 @@ class Orchestrator:
         if isinstance(items, dict):
             items = [items]
         for it in items:
-            if isinstance(it, dict) and _normalize_btih(it.get("hash")) == btih:
+            if isinstance(it, dict) and _normalize_btih(it.get("hash")) == infohash:
                 j.torrent_id = it.get("id")
                 return True
         return False

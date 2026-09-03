@@ -16,6 +16,7 @@ from concierge.orchestrator import Orchestrator
 from concierge.providers import torbox
 
 BTIH = "0123456789abcdef0123456789abcdef01234567"
+TORRENT = b"d4:infod4:name1:xee"
 
 
 def _start(handler):
@@ -197,7 +198,7 @@ def test_failed_create_adopts_cloud_copy_by_hash(torbox_fake, abdm_fake):
 
 def test_torrent_upload_pins_the_file_content_type(torbox_fake, abdm_fake, tmp_path):
     p = tmp_path / "x.torrent"
-    p.write_bytes(b"d8:announce0:e")
+    p.write_bytes(TORRENT)
     o = _orch(torbox_fake, abdm_fake)
     j = o.submit("C:/dl", torrent_path=str(p))
     assert j.state == orch.CLOUD_PENDING

@@ -2,13 +2,14 @@ import json
 
 import pytest
 
-from concierge import abdm
+from concierge import abdm, torrent
 from concierge import orchestrator as orch
 from concierge.orchestrator import CLOUD_PENDING, DONE, FAILED, READY, RECEIVED, Job, Orchestrator
 from concierge.providers.torbox import CooldownLimit, TorBoxError
 
 BTIH = "0123456789abcdef0123456789abcdef01234567"
 BTIH_BASE32 = "AERUKZ4JVPG66AJDIVTYTK6N54ASGRLH"
+TORRENT = b"d4:infod4:name1:xee"
 
 
 class _StubTB:
@@ -18,8 +19,10 @@ class _StubTB:
         self.create_raises = False
         self.list_error = False
         self.list_calls = 0
+        self.create_calls = 0
 
     def create(self, magnet=None, torrent_path=None, **kw):
+        self.create_calls += 1
         if self.create_raises:
             raise TorBoxError("torbox unreachable after 1 tries (timeout)")
         self.created = magnet or torrent_path
@@ -266,6 +269,7 @@ def test_old_job_gets_poll_defaults(env):
     assert job.next_poll_at == 0
     assert job.poll_errors == 0
     assert job.missing_polls == 0
+    assert job.infohash is None
 
 
 def test_broken_jobs_file_is_preserved_and_repaired(env):
@@ -324,6 +328,28 @@ def test_bad_state_type_is_rejected(env):
 
     loaded = Orchestrator(tb=tb, adm=adm)
 
+    assert loaded.jobs == {}
+    assert loaded.load_warning is not None
+
+
+def test_saved_infohash_is_normalized(env):
+    _, tb, adm = env
+    value = {"source": "x.torrent", "folder": "C:/dl", "state": CLOUD_PENDING,
+             "torrent_id": 7, "infohash": BTIH.upper()}
+    orch.JOBS_FILE.write_text(json.dumps([value]))
+
+    loaded = Orchestrator(tb=tb, adm=adm)
+    (job,) = loaded.jobs.values()
+    assert job.infohash == BTIH
+
+
+def test_invalid_saved_infohash_is_rejected(env):
+    _, tb, adm = env
+    value = {"source": "x.torrent", "folder": "C:/dl", "state": CLOUD_PENDING,
+             "torrent_id": 7, "infohash": "not-a-hash"}
+    orch.JOBS_FILE.write_text(json.dumps([value]))
+
+    loaded = Orchestrator(tb=tb, adm=adm)
     assert loaded.jobs == {}
     assert loaded.load_warning is not None
 
@@ -477,10 +503,81 @@ def test_resume_failed_without_torrent_id_reconciles_before_readd(env):
 def test_resume_or_submit_torrent_path(env, tmp_path):
     o, tb, _ = env
     p = tmp_path / "x.torrent"
-    p.write_bytes(b"d8:announce0:e")
+    p.write_bytes(TORRENT)
     j = o.resume_or_submit(str(p), "C:/dl")
     assert tb.created == str(p)
     assert j.state == CLOUD_PENDING
+
+
+def test_torrent_copy_resumes_by_infohash(env, tmp_path):
+    o, tb, _ = env
+    first = tmp_path / "first.torrent"
+    second = tmp_path / "renamed.torrent"
+    first.write_bytes(TORRENT)
+    second.write_bytes(TORRENT)
+
+    j = o.resume_or_submit(str(first), "C:/dl")
+    assert o.resume_or_submit(str(second), "C:/dl") is j
+    assert tb.create_calls == 1
+    assert len(o.jobs) == 1
+
+
+def test_torrent_metadata_outside_info_still_resumes(env, tmp_path):
+    o, tb, _ = env
+    first = tmp_path / "first.torrent"
+    second = tmp_path / "second.torrent"
+    first.write_bytes(b"d8:announce3:one4:infod4:name1:xee")
+    second.write_bytes(b"d7:comment5:hello4:infod4:name1:xee")
+
+    j = o.resume_or_submit(str(first), "C:/dl")
+    assert o.resume_or_submit(str(second), "C:/dl") is j
+    assert tb.create_calls == 1
+
+
+def test_different_torrent_info_creates_another_job(env, tmp_path):
+    o, tb, _ = env
+    first = tmp_path / "first.torrent"
+    second = tmp_path / "second.torrent"
+    first.write_bytes(TORRENT)
+    second.write_bytes(b"d4:infod4:name1:yee")
+
+    o.resume_or_submit(str(first), "C:/dl")
+    o.resume_or_submit(str(second), "C:/dl")
+    assert tb.create_calls == 2
+    assert len(o.jobs) == 2
+
+
+def test_bad_torrent_fails_before_cloud_create(env, tmp_path):
+    o, tb, _ = env
+    path = tmp_path / "bad.torrent"
+    path.write_bytes(b"not bencode")
+
+    j = o.resume_or_submit(str(path), "C:/dl")
+    assert j.state == FAILED
+    assert j.error == "invalid torrent file"
+    assert tb.create_calls == 0
+
+
+def test_missing_torrent_fails_before_cloud_create(env, tmp_path):
+    o, tb, _ = env
+    j = o.resume_or_submit(str(tmp_path / "gone.torrent"), "C:/dl")
+    assert j.state == FAILED
+    assert j.error == "cannot read torrent file (FileNotFoundError)"
+    assert tb.create_calls == 0
+
+
+def test_ambiguous_torrent_upload_adopts_cloud_item(env, tmp_path):
+    o, tb, _ = env
+    path = tmp_path / "x.torrent"
+    path.write_bytes(TORRENT)
+    expected = torrent.infohash(TORRENT)
+    tb.create_raises = True
+    tb.items = [{"hash": expected, "id": 9}]
+
+    j = o.resume_or_submit(str(path), "C:/dl")
+    assert j.state == CLOUD_PENDING
+    assert j.torrent_id == 9
+    assert tb.create_calls == 1
 
 
 def test_abdm_down_fails_then_retry_hands_all(env):
