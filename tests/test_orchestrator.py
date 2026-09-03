@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from concierge import abdm
@@ -11,6 +13,8 @@ class _StubTB:
         self.created = None
         self.items = []
         self.create_raises = False
+        self.list_error = False
+        self.list_calls = 0
 
     def create(self, magnet=None, torrent_path=None, **kw):
         if self.create_raises:
@@ -19,6 +23,9 @@ class _StubTB:
         return {"torrent_id": 7}
 
     def mylist(self, torrent_id=None):
+        self.list_calls += 1
+        if self.list_error:
+            raise TorBoxError("torbox unreachable")
         return self.items
 
     def requestdl(self, torrent_id, file_id):
@@ -80,6 +87,55 @@ def test_poll_incomplete_stays_pending(env):
     assert j.polls == 1
 
 
+def test_poll_waits_until_due(env):
+    o, tb, _ = env
+    j = o.submit("C:/dl", magnet="m")
+    j.next_poll_at = 20
+    tb.items = [{"progress": 0.5, "download_finished": False, "files": []}]
+    o.tick(now=10)
+    assert j.polls == 0
+    assert tb.list_calls == 0
+
+
+def test_poll_records_next_due_time(env):
+    o, tb, _ = env
+    j = o.submit("C:/dl", magnet="m")
+    tb.items = [{"progress": 0.5, "download_finished": False, "files": []}]
+    o.tick(now=100)
+    assert j.next_poll_at == 105
+
+
+def test_poll_errors_eventually_fail(env):
+    o, tb, _ = env
+    j = o.submit("C:/dl", magnet="m")
+    tb.list_error = True
+    for _ in range(orch.MAX_POLL_ERRORS):
+        o.tick()
+    assert j.state == FAILED
+    assert j.poll_errors == orch.MAX_POLL_ERRORS
+
+
+def test_good_poll_resets_error_count(env):
+    o, tb, _ = env
+    j = o.submit("C:/dl", magnet="m")
+    j.poll_errors = 2
+    j.error = "old error"
+    tb.items = [{"progress": 0.5, "download_finished": False, "files": []}]
+    o.tick()
+    assert j.poll_errors == 0
+    assert j.error is None
+
+
+def test_missing_torrent_eventually_fails(env):
+    o, _, _ = env
+    j = o.submit("C:/dl", magnet="m")
+    for _ in range(orch.MAX_MISSING_POLLS):
+        o.tick()
+    assert j.state == FAILED
+    assert j.missing_polls == orch.MAX_MISSING_POLLS
+    assert j.error == "torbox did not return this torrent"
+
+
 def test_poll_handles_dict_response(env):
     o, tb, _ = env
     j = o.submit("C:/dl", magnet="m")
@@ -93,6 +149,8 @@ def test_multifile_poll_then_handoff(env):
     j = o.submit("C:/dl", magnet="m")
     tb.items = [{"progress": 1, "download_finished": True,
                  "files": [{"id": 1, "name": "a.mkv"}, {"id": 2, "name": "b.mkv"}]}]
+    o.tick()
+    assert j.state == READY
     o.tick()
     assert j.state == READY
     o.tick()
@@ -128,6 +186,27 @@ def test_restart_recovers_pending(env):
     (j,) = o2.jobs.values()
     assert j.state == CLOUD_PENDING
     assert j.torrent_id == 7
+
+
+def test_restart_keeps_ready_job(env):
+    o, tb, _ = env
+    j = Job(source="m", folder="C:/dl", state=READY, torrent_id=7,
+            files=[{"id": 1, "name": "a.mkv"}])
+    o.jobs[j.job_id] = j
+    o.save()
+    o2 = Orchestrator(tb=tb, adm=_StubAdm())
+    assert o2.jobs[j.job_id].state == READY
+
+
+def test_old_job_gets_poll_defaults(env):
+    _, tb, _ = env
+    old = {"source": "m", "folder": "C:/dl", "state": CLOUD_PENDING, "torrent_id": 7}
+    orch.JOBS_FILE.write_text(json.dumps([old]))
+    loaded = Orchestrator(tb=tb, adm=_StubAdm())
+    (job,) = loaded.jobs.values()
+    assert job.next_poll_at == 0
+    assert job.poll_errors == 0
+    assert job.missing_polls == 0
 
 
 def test_retry_after_partial_handoff(env):
@@ -167,10 +246,14 @@ def test_resume_or_submit_retries_failed_handoff_with_files(env):
 
 def test_resume_or_submit_retries_failed_handoff_without_files(env):
     o, _, _ = env
-    j = Job(source="magnet:?xt=urn:btih:x", folder="C:/dl", state=FAILED, torrent_id=7)
+    j = Job(source="magnet:?xt=urn:btih:x", folder="C:/dl", state=FAILED, torrent_id=7,
+            next_poll_at=50, poll_errors=2, missing_polls=1)
     o.jobs[j.job_id] = j
     got = o.resume_or_submit("magnet:?xt=urn:btih:x", "C:/dl")
     assert got.state == CLOUD_PENDING
+    assert got.next_poll_at == 0
+    assert got.poll_errors == 0
+    assert got.missing_polls == 0
 
 
 def test_resume_or_submit_done_job_is_returned_not_readded(env):
@@ -244,6 +327,8 @@ def test_abdm_down_fails_then_retry_hands_all(env):
     assert j.handed == 0
     j.state = READY
     o.tick()
+    assert j.state == READY
+    o.tick()
     assert j.state == DONE
     assert len(adm.handed) == 2
 
@@ -270,6 +355,9 @@ def test_handed_persists_per_file(monkeypatch, tmp_path):
     j = Job(source="m", folder="C:/dl", state=READY, torrent_id=7,
             files=[{"id": 1, "name": "a.mkv"}, {"id": 2, "name": "b.mkv"}])
     o.jobs[j.job_id] = j
+    o.tick()
+    assert j.state == READY
+    assert j.handed == 1
     o.tick()
     assert j.state == FAILED
     o2 = Orchestrator(tb=tb, adm=_StubAdm())

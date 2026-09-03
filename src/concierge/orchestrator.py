@@ -17,6 +17,8 @@ DONE = "done"  # abdm owns local progress once handed off, so handed_off == done
 FAILED = "failed"
 
 POLL_DELTAS = (0, 5, 25)  # polls land at 0s/5s/30s, then every 10s
+MAX_POLL_ERRORS = 6
+MAX_MISSING_POLLS = 3
 TERMINAL = (DONE, FAILED)
 KEEP_TERMINAL = 20  # finished jobs double as click-dedupe, keep the newest 20
 
@@ -39,6 +41,9 @@ class Job:
     files: list = field(default_factory=list)
     handed: int = 0
     polls: int = 0
+    next_poll_at: float = 0
+    poll_errors: int = 0
+    missing_polls: int = 0
     error: str | None = None
     job_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
 
@@ -48,6 +53,10 @@ class Orchestrator:
         self.tb = tb if tb is not None else torbox.TorBoxClient(config.get_torbox_key())
         self.adm = adm if adm is not None else abdm.AbdmClient()
         self.jobs = {}
+        self.reload()
+
+    def reload(self):
+        self.jobs.clear()
         self._load()
 
     def _load(self):
@@ -57,9 +66,8 @@ class Orchestrator:
             return
         for d in raw:
             j = Job(**d)
-            # a restart mid-flight can't know what happened; poll again
-            if j.state not in (DONE, FAILED):
-                j.state = CLOUD_PENDING if j.torrent_id else RECEIVED
+            if j.state == RECEIVED and j.torrent_id:
+                j.state = CLOUD_PENDING
             self.jobs[j.job_id] = j
 
     def _prune(self):
@@ -127,6 +135,9 @@ class Orchestrator:
                 if job.torrent_id:
                     # a failed hand-off with a live torrent_id retries
                     job.state = READY if job.files else CLOUD_PENDING
+                    job.next_poll_at = 0
+                    job.poll_errors = 0
+                    job.missing_polls = 0
                 elif source.startswith("magnet:") and self._reconcile(job, source):
                     job.state = CLOUD_PENDING
                 else:
@@ -164,10 +175,14 @@ class Orchestrator:
     def next_delay(self, j: Job) -> int:
         return POLL_DELTAS[j.polls] if j.polls < len(POLL_DELTAS) else 10
 
-    def tick(self):
+    def tick(self, now: float | None = None):
         for j in list(self.jobs.values()):
             if j.state == CLOUD_PENDING:
+                if now is not None and j.next_poll_at > now:
+                    continue
                 self._poll(j)
+                if now is not None and j.state == CLOUD_PENDING:
+                    j.next_poll_at = now + self.next_delay(j)
             elif j.state == READY:
                 self._handoff(j)
         self.save()
@@ -177,13 +192,23 @@ class Orchestrator:
         try:
             items = self.tb.mylist(torrent_id=j.torrent_id)
         except torbox.TorBoxError as e:
-            j.error = str(e)  # transient; stay pending, keep last error for surfacing
+            j.poll_errors += 1
+            j.error = str(e)
+            if j.poll_errors >= MAX_POLL_ERRORS:
+                j.state = FAILED
             return
+        j.poll_errors = 0
         if isinstance(items, dict):  # mylist?id= returns the object, not a list
             items = [items]
         it = items[0] if items else None
         if not it:
+            j.missing_polls += 1
+            j.error = "torbox did not return this torrent"
+            if j.missing_polls >= MAX_MISSING_POLLS:
+                j.state = FAILED
             return
+        j.missing_polls = 0
+        j.error = None
         if it.get("download_finished") or (it.get("progress") or 0) >= 1:
             j.files = it.get("files") or []
             j.state = READY
@@ -191,7 +216,8 @@ class Orchestrator:
     def _handoff(self, j: Job):
         # resume from j.handed so a crashed retry never double-adds to abdm
         try:
-            for f in j.files[j.handed:]:
+            if j.handed < len(j.files):
+                f = j.files[j.handed]
                 link = self.tb.requestdl(j.torrent_id, f["id"])
                 # abdm rejects '/' in names; torbox nests subfolders in them
                 name = (f.get("name") or "").rsplit("/", 1)[-1]
@@ -203,4 +229,5 @@ class Orchestrator:
             j.state = FAILED
             j.error = str(e)
             return
-        j.state = DONE
+        if j.handed >= len(j.files):
+            j.state = DONE

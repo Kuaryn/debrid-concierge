@@ -28,11 +28,10 @@ and `config.json` (TorBox key, last folder choice).
 
 ## Design decisions and known limits
 
-**One worker at a time.** Every click spawns a fresh worker process, so two
-workers could race on `jobs.json`. Workers take a named mutex; the one that
-holds it drains every unfinished job before releasing. A second click while
-a job runs just waits its turn. Coarse on purpose: for a single-user desktop
-tool, correctness first, and parallel workers would buy nothing.
+**Shared job file.** Every click spawns a worker process. Workers take a named
+mutex while they load and update `jobs.json`, then release it between cloud
+polls. Each cycle reloads the saved state, so a second click can add its job
+without waiting for an older cloud download to finish.
 
 **Ambiguous cloud adds.** If the request that adds a torrent times out on my
 side but succeeded on TorBox's, submitting again would add the same torrent
