@@ -77,7 +77,12 @@ def main(argv=None) -> int:
     ap.add_argument("--source", required=True)
     ap.add_argument("--folder")
     a = ap.parse_args(argv)
-    job = run(a.source, a.folder)
+    try:
+        job = run(a.source, a.folder)
+    # I keep one last boundary because this detached worker has no console.
+    except Exception as e:  # noqa: BLE001
+        dialog.show_error(f"concierge worker stopped ({e.__class__.__name__})")
+        return 1
     return 0 if job is None or job.state == orch.DONE else 1
 
 

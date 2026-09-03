@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -610,6 +611,87 @@ def test_save_failure_leaves_previous_file_intact(env, monkeypatch):
     with pytest.raises(ValueError):
         o.save()
     assert orch.JOBS_FILE.read_text() == before
+
+
+def test_save_retries_a_temporary_replace_failure(env, monkeypatch):
+    o, _, _ = env
+    o.submit("C:/dl", magnet="m")
+    real_replace = orch.os.replace
+    waits = []
+
+    def flaky_replace(source, target):
+        if len(waits) < 2:
+            raise PermissionError("file is open")
+        real_replace(source, target)
+
+    monkeypatch.setattr(orch.os, "replace", flaky_replace)
+    monkeypatch.setattr(orch.time, "sleep", waits.append)
+
+    o.save()
+
+    assert waits == [orch.SAVE_RETRY_DELAY, orch.SAVE_RETRY_DELAY]
+    assert not orch.JOBS_FILE.with_suffix(".tmp").exists()
+
+
+def test_save_replace_failure_keeps_the_previous_file(env, monkeypatch):
+    o, _, _ = env
+    o.submit("C:/dl", magnet="m")
+    before = orch.JOBS_FILE.read_text()
+    o.jobs["new"] = Job(source="another", folder="C:/dl", state=DONE, job_id="new")
+
+    def blocked_replace(source, target):
+        raise PermissionError("file is open")
+
+    monkeypatch.setattr(orch.os, "replace", blocked_replace)
+    monkeypatch.setattr(orch.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(
+            orch.JobsError, match=r"saved jobs could not be written \(PermissionError\)"):
+        o.save()
+
+    assert orch.JOBS_FILE.read_text() == before
+    assert not orch.JOBS_FILE.with_suffix(".tmp").exists()
+
+
+def test_save_write_failure_is_a_jobs_error(env, monkeypatch):
+    o, _, _ = env
+    o.submit("C:/dl", magnet="m")
+    before = orch.JOBS_FILE.read_text()
+    tmp = orch.JOBS_FILE.with_suffix(".tmp")
+    real_write = type(tmp).write_text
+
+    def fail_tmp(path, text, *args, **kwargs):
+        if path == tmp:
+            raise OSError("disk full")
+        return real_write(path, text, *args, **kwargs)
+
+    monkeypatch.setattr(type(tmp), "write_text", fail_tmp)
+
+    with pytest.raises(orch.JobsError, match=r"saved jobs could not be written \(OSError\)"):
+        o.save()
+
+    assert orch.JOBS_FILE.read_text() == before
+    assert not tmp.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="windows file sharing")
+def test_save_waits_for_an_open_reader(env, monkeypatch):
+    o, _, _ = env
+    o.submit("C:/dl", magnet="m")
+    held = orch.JOBS_FILE.open()
+    released = []
+
+    def release_reader(seconds):
+        held.close()
+        released.append(seconds)
+
+    monkeypatch.setattr(orch.time, "sleep", release_reader)
+    try:
+        o.save()
+    finally:
+        held.close()
+
+    assert released == [orch.SAVE_RETRY_DELAY]
 
 
 def test_handed_persists_per_file(monkeypatch, tmp_path):

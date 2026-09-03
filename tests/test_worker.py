@@ -142,6 +142,19 @@ def test_main_exit_codes(monkeypatch):
     assert worker.main(["--source", "m", "--folder", "C:/dl"]) == 1
 
 
+def test_main_shows_an_unexpected_worker_error(monkeypatch):
+    shown = []
+
+    def fail(source, folder, o=None):
+        raise OSError("private detail")
+
+    monkeypatch.setattr(worker, "run", fail)
+    monkeypatch.setattr(worker.dialog, "show_error", shown.append)
+
+    assert worker.main(["--source", "m", "--folder", "C:/dl"]) == 1
+    assert shown == ["concierge worker stopped (OSError)"]
+
+
 def test_worker_lock_yields():
     with lock.worker_lock():
         assert True

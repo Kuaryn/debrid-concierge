@@ -5,6 +5,7 @@ import binascii
 import json
 import math
 import os
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from urllib.parse import parse_qsl, urlsplit
@@ -25,6 +26,8 @@ MAX_POLL_ERRORS = 6
 MAX_MISSING_POLLS = 3
 TERMINAL = (DONE, FAILED)
 KEEP_TERMINAL = 20  # finished jobs double as click-dedupe, keep the newest 20
+SAVE_ATTEMPTS = 10
+SAVE_RETRY_DELAY = 0.05
 WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
                     *(f"LPT{i}" for i in range(1, 10))}
 
@@ -140,6 +143,17 @@ class JobsError(Exception):
     pass
 
 
+def _replace_jobs(tmp) -> None:
+    for attempt in range(SAVE_ATTEMPTS):
+        try:
+            os.replace(tmp, JOBS_FILE)
+            return
+        except PermissionError:
+            if attempt == SAVE_ATTEMPTS - 1:
+                raise
+            time.sleep(SAVE_RETRY_DELAY)
+
+
 class Orchestrator:
     def __init__(self, tb=None, adm=None):
         self.tb = tb if tb is not None else torbox.TorBoxClient(config.get_torbox_key())
@@ -190,10 +204,26 @@ class Orchestrator:
     def save(self):
         self._prune()
         # temp + replace: a crash mid-write must not truncate the real file
-        JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = JOBS_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps([asdict(j) for j in self.jobs.values()], indent=2))
-        os.replace(tmp, JOBS_FILE)
+        text = json.dumps([asdict(j) for j in self.jobs.values()], indent=2)
+        failure = None
+        try:
+            JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(text)
+            _replace_jobs(tmp)
+        except OSError as e:
+            failure = e
+        finally:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                failure = failure or e
+        if failure is not None:
+            raise JobsError(
+                f"saved jobs could not be written ({failure.__class__.__name__})"
+            ) from None
 
     def submit(self, folder: str, magnet: str | None = None,
                torrent_path: str | None = None, infohash: str | None = None) -> Job:
