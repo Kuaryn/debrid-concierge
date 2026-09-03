@@ -15,6 +15,8 @@ from concierge.abdm import AbdmClient
 from concierge.orchestrator import Orchestrator
 from concierge.providers import torbox
 
+BTIH = "0123456789abcdef0123456789abcdef01234567"
+
 
 def _start(handler):
     srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -178,12 +180,12 @@ def test_failed_create_adopts_cloud_copy_by_hash(torbox_fake, abdm_fake):
     torbox_fake.state["fail_create_once"] = True
     # pretend the "failed" add actually landed server-side
     torbox_fake.state["torrents"].append({
-        "id": 99, "hash": "abc", "name": "thing",
+        "id": 99, "hash": BTIH, "name": "thing",
         "download_finished": True, "progress": 1,
         "files": [{"id": 1, "name": "a.mkv"}],
     })
     o = _orch(torbox_fake, abdm_fake)
-    j = o.submit("C:/dl", magnet="magnet:?xt=urn:btih:abc&dn=thing")
+    j = o.submit("C:/dl", magnet=f"magnet:?xt=urn:btih:{BTIH}&dn=thing")
     # adopted the cloud copy instead of adding a second one
     assert j.torrent_id == 99
     assert torbox_fake.state["creates"] == 1

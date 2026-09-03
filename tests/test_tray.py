@@ -26,6 +26,13 @@ def test_toast_on_failure_includes_error():
     assert events == [("concierge failed", "a: boom")]
 
 
+def test_toast_does_not_show_magnet_source():
+    job = _job("a", orch.DONE)
+    job["source"] = "magnet:?xt=urn:btih:secret&tr=https://tracker.example"
+    events = tray.toast_events({"a": orch.READY}, [job])
+    assert job["source"] not in " ".join(events[0])
+
+
 def test_no_toast_on_first_sight():
     assert tray.toast_events({}, [_job("a", orch.FAILED, "boom")]) == []
 

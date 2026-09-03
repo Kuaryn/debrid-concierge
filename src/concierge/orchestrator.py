@@ -1,10 +1,13 @@
 """Job state machine: cloud add, poll to completion, per-file hand-off to ABDM."""
 
+import base64
+import binascii
 import json
 import math
 import os
 import uuid
 from dataclasses import asdict, dataclass, field
+from urllib.parse import parse_qsl, urlsplit
 
 from concierge import abdm, config
 from concierge.providers import torbox
@@ -26,13 +29,43 @@ WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10
                     *(f"LPT{i}" for i in range(1, 10))}
 
 
+def _normalize_btih(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if len(value) == 40 and all(c in "0123456789abcdefABCDEF" for c in value):
+        return value.lower()
+    if len(value) != 32:
+        return None
+    try:
+        decoded = base64.b32decode(value, casefold=True)
+    except (binascii.Error, ValueError):
+        return None
+    return decoded.hex() if len(decoded) == 20 else None
+
+
 def _btih(magnet: str) -> str | None:
-    if "?" not in magnet:
-        return None  # malformed magnet must not crash the recovery path
-    for part in magnet.split("?", 1)[1].split("&"):
-        if part.startswith("xt=urn:btih:"):
-            return part[len("xt=urn:btih:"):].lower()
+    try:
+        parsed = urlsplit(magnet)
+        params = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=100)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() != "magnet":
+        return None
+    for key, value in params:
+        if key.lower() != "xt" or not value.lower().startswith("urn:btih:"):
+            continue
+        btih = _normalize_btih(value[len("urn:btih:"):])
+        if btih:
+            return btih
     return None
+
+
+def _same_source(saved: str, source: str) -> bool:
+    saved_btih = _btih(saved)
+    source_btih = _btih(source)
+    if saved_btih is not None and source_btih is not None:
+        return saved_btih == source_btih
+    return saved == source
 
 
 def _file_name(value) -> str | None:
@@ -194,13 +227,13 @@ class Orchestrator:
         # the job this source would resume, or None if a fresh add is needed
         job = next(
             (j for j in self.jobs.values()
-             if j.source == source and j.state not in TERMINAL),
+             if _same_source(j.source, source) and j.state not in TERMINAL),
             None,
         )
         if job is None:
             job = next(
                 (j for j in self.jobs.values()
-                 if j.source == source and j.state == FAILED),
+                 if _same_source(j.source, source) and j.state == FAILED),
                 None,
             )
             if job is not None:
@@ -222,7 +255,7 @@ class Orchestrator:
             # cloud item that torbox cooldowns us for deleting
             job = next(
                 (j for j in self.jobs.values()
-                 if j.source == source and j.state == DONE),
+                 if _same_source(j.source, source) and j.state == DONE),
                 None,
             )
         return job
@@ -239,7 +272,7 @@ class Orchestrator:
         if isinstance(items, dict):
             items = [items]
         for it in items:
-            if (it.get("hash") or "").lower() == btih:
+            if isinstance(it, dict) and _normalize_btih(it.get("hash")) == btih:
                 j.torrent_id = it.get("id")
                 return True
         return False

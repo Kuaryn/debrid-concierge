@@ -7,6 +7,9 @@ from concierge import orchestrator as orch
 from concierge.orchestrator import CLOUD_PENDING, DONE, FAILED, READY, RECEIVED, Job, Orchestrator
 from concierge.providers.torbox import CooldownLimit, TorBoxError
 
+BTIH = "0123456789abcdef0123456789abcdef01234567"
+BTIH_BASE32 = "AERUKZ4JVPG66AJDIVTYTK6N54ASGRLH"
+
 
 class _StubTB:
     def __init__(self):
@@ -348,6 +351,40 @@ def test_resume_or_submit_resumes_pending(env):
     assert len(o.jobs) == 1  # resumed, not re-added
 
 
+def test_match_uses_hash_across_reordered_parameters(env):
+    o, _, _ = env
+    original = f"magnet:?xt=urn:btih:{BTIH}&dn=first&tr=https%3A%2F%2Fone.example"
+    j = o.submit("C:/dl", magnet=original)
+
+    changed = f"magnet:?tr=https%3A%2F%2Ftwo.example&dn=second&xt=urn:btih:{BTIH}"
+    assert o.resume_or_submit(changed, "C:/dl") is j
+    assert len(o.jobs) == 1
+
+
+def test_match_treats_base32_and_hex_as_the_same_hash(env):
+    o, _, _ = env
+    j = o.submit("C:/dl", magnet=f"magnet:?xt=urn:btih:{BTIH}")
+
+    assert o.match(f"magnet:?xt=urn:btih:{BTIH_BASE32}") is j
+
+
+def test_match_keeps_distinct_hashes_separate(env):
+    o, _, _ = env
+    o.submit("C:/dl", magnet=f"magnet:?xt=urn:btih:{BTIH}&dn=same")
+    other = "1123456789abcdef0123456789abcdef01234567"
+
+    assert o.match(f"magnet:?xt=urn:btih:{other}&dn=same") is None
+
+
+def test_match_falls_back_to_exact_malformed_source(env):
+    o, _, _ = env
+    source = "magnet:?xt=urn:btih:not-a-hash&dn=old"
+    j = o.submit("C:/dl", magnet=source)
+
+    assert o.match(source) is j
+    assert o.match("magnet:?dn=old&xt=urn:btih:not-a-hash") is None
+
+
 def test_resume_or_submit_retries_failed_handoff_with_files(env):
     o, _, _ = env
     j = Job(source="magnet:?xt=urn:btih:x", folder="C:/dl", state=FAILED, torrent_id=7,
@@ -385,8 +422,8 @@ def test_resume_or_submit_done_job_is_returned_not_readded(env):
 def test_submit_ambiguous_create_adopts_cloud_item(env):
     o, tb, _ = env
     tb.create_raises = True
-    tb.items = [{"hash": "ABC", "id": 9}]
-    j = o.submit("C:/dl", magnet="magnet:?xt=urn:btih:abc&dn=x")
+    tb.items = [{"hash": BTIH.upper(), "id": 9}]
+    j = o.submit("C:/dl", magnet=f"magnet:?xt=urn:btih:{BTIH}&dn=x")
     assert j.state == CLOUD_PENDING
     assert j.torrent_id == 9
 
@@ -403,6 +440,19 @@ def test_btih_without_query_returns_none():
     assert orch._btih("magnet:urn:btih:abc") is None
 
 
+def test_btih_normalizes_hex_base32_and_encoded_xt():
+    assert orch._btih(f"magnet:?xt=urn:btih:{BTIH.upper()}") == BTIH
+    assert orch._btih(f"magnet:?xt=urn:btih:{BTIH_BASE32}") == BTIH
+    encoded = f"magnet:?dn=x&xt=urn%3Abtih%3A{BTIH}"
+    assert orch._btih(encoded) == BTIH
+
+
+def test_btih_skips_unrelated_and_invalid_xt_values():
+    magnet = f"magnet:?xt=urn:sha1:nope&xt=urn:btih:short&xt=urn:btih:{BTIH}"
+    assert orch._btih(magnet) == BTIH
+    assert orch._btih("magnet:?xt=urn:btih:not-a-hash") is None
+
+
 def test_submit_ambiguous_malformed_magnet_fails_without_crash(env):
     o, tb, _ = env
     tb.create_raises = True
@@ -413,10 +463,11 @@ def test_submit_ambiguous_malformed_magnet_fails_without_crash(env):
 
 def test_resume_failed_without_torrent_id_reconciles_before_readd(env):
     o, tb, _ = env
-    j = Job(source="magnet:?xt=urn:btih:abc", folder="C:/dl", state=FAILED, error="x")
+    source = f"magnet:?xt=urn:btih:{BTIH}"
+    j = Job(source=source, folder="C:/dl", state=FAILED, error="x")
     o.jobs[j.job_id] = j
-    tb.items = [{"hash": "abc", "id": 9}]
-    got = o.resume_or_submit("magnet:?xt=urn:btih:abc", "C:/dl")
+    tb.items = [{"hash": BTIH, "id": 9}]
+    got = o.resume_or_submit(source, "C:/dl")
     assert got is j
     assert got.state == CLOUD_PENDING
     assert got.torrent_id == 9
