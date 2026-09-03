@@ -144,6 +144,42 @@ def test_poll_handles_dict_response(env):
     assert j.state == READY
 
 
+def test_poll_rejects_non_object_item(env):
+    o, tb, _ = env
+    j = o.submit("C:/dl", magnet="m")
+    tb.items = ["bad"]
+    o.tick()
+    assert j.state == FAILED
+    assert j.error == "torbox returned an invalid torrent"
+
+
+def test_poll_rejects_bad_progress(env):
+    o, tb, _ = env
+    j = o.submit("C:/dl", magnet="m")
+    tb.items = [{"progress": "1", "files": []}]
+    o.tick()
+    assert j.state == FAILED
+    assert j.error == "torbox returned invalid progress"
+
+
+def test_poll_rejects_finished_without_files(env):
+    o, tb, _ = env
+    j = o.submit("C:/dl", magnet="m")
+    tb.items = {"progress": 1, "files": []}
+    o.tick()
+    assert j.state == FAILED
+    assert j.error == "completed torrent returned no files"
+
+
+def test_poll_rejects_file_without_id(env):
+    o, tb, _ = env
+    j = o.submit("C:/dl", magnet="m")
+    tb.items = {"progress": 1, "files": [{"name": "a.mkv"}]}
+    o.tick()
+    assert j.state == FAILED
+    assert j.error == "torbox returned an invalid file list"
+
+
 def test_multifile_poll_then_handoff(env):
     o, tb, adm = env
     j = o.submit("C:/dl", magnet="m")
@@ -167,6 +203,26 @@ def test_handoff_strips_subfolder_from_name(env):
     o.tick()
     assert j.state == DONE
     assert adm.handed[0][2] == "Big Buck Bunny.en.srt"
+
+
+def test_handoff_sanitizes_windows_name(env):
+    o, _, adm = env
+    j = Job(source="m", folder="C:/dl", state=READY, torrent_id=7,
+            files=[{"id": 1, "name": r"..\..\Startup\evil?.exe"}])
+    o.jobs[j.job_id] = j
+    o.tick()
+    assert j.state == DONE
+    assert adm.handed[0][2] == "evil_.exe"
+
+
+def test_handoff_rejects_empty_files(env):
+    o, _, adm = env
+    j = Job(source="m", folder="C:/dl", state=READY, torrent_id=7)
+    o.jobs[j.job_id] = j
+    o.tick()
+    assert j.state == FAILED
+    assert j.error == "completed torrent returned no files"
+    assert adm.handed == []
 
 
 def test_next_delay_schedule(env):

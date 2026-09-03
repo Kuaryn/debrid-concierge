@@ -8,7 +8,7 @@ class _StubResp:
     status_code = 200
 
     def json(self):
-        return {"success": True, "data": "ok"}
+        return {"success": True, "data": "https://cdn.example/file"}
 
 
 def _capture(client):
@@ -44,7 +44,26 @@ def test_requestdl_passes_token_in_params():
     url = c.requestdl(1, 0)
     assert seen["params"]["token"] == "dummy"
     assert "token" not in seen["url"]
-    assert url == "ok"
+    assert url == "https://cdn.example/file"
+
+
+def test_download_url_rejects_local_and_non_https_values():
+    bad = (
+        "http://cdn.example/file",
+        "https://127.0.0.1/private",
+        "https://[::1]/private",
+        "https://user:pass@cdn.example/file",
+        "https://@cdn.example/file",
+        "https://localhost./private",
+        "https://host.local/private",
+        "https://single-label/file",
+        "https://cdn.example/bad path",
+        "not a url",
+        None,
+    )
+    for value in bad:
+        with pytest.raises(torbox.TorBoxError):
+            torbox._download_url(value)
 
 
 def test_create_does_not_retry_network_failure():
@@ -82,3 +101,9 @@ def test_create_torrent_file_sends_multipart(tmp_path):
     name, _, ctype = seen["files"]["file"]
     assert name == "x.torrent"
     assert ctype == "application/x-bittorrent"
+
+
+def test_missing_torrent_file_is_a_torbox_error(tmp_path):
+    c = torbox.TorBoxClient("dummy")
+    with pytest.raises(torbox.TorBoxError, match="cannot read torrent file"):
+        c.create(torrent_path=str(tmp_path / "gone.torrent"))

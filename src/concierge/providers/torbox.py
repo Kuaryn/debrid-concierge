@@ -1,9 +1,11 @@
 """TorBox API client covering the endpoints the concierge actually uses."""
 
-import os
+import ipaddress
 import re
 import time
 from collections import deque
+from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 
@@ -29,13 +31,20 @@ class MonthlyLimit(TorBoxError):
     pass
 
 
+def _safe_message(err) -> str:
+    return re.sub(r"token(?:=|%3d)[^&\s)]+", "token=<redacted>", str(err),
+                  flags=re.IGNORECASE)
+
+
 def _raise_for_error(payload: dict) -> None:
     # error shape: {"success": false, "error": "...", "detail": "...", "data": {...}}
-    name = payload.get("error") or ""
-    detail = payload.get("detail") or name or "unknown torbox error"
+    name = payload.get("error")
+    name = name if isinstance(name, str) else ""
+    detail = _safe_message(payload.get("detail") or name or "unknown torbox error")
     if name == "COOLDOWN_LIMIT":
         data = payload.get("data") or {}
-        raise CooldownLimit(detail, data.get("cooldown_until"))
+        until = data.get("cooldown_until") if isinstance(data, dict) else None
+        raise CooldownLimit(detail, until)
     cls = {"ACTIVE_LIMIT": ActiveLimit, "MONTHLY_LIMIT": MonthlyLimit}.get(name)
     if cls:
         raise cls(detail)
@@ -49,14 +58,39 @@ def _parse(resp: requests.Response):
         payload = resp.json()
     except ValueError:
         raise TorBoxError(f"non-json response (http {resp.status_code})")
+    if not isinstance(payload, dict):
+        raise TorBoxError("torbox returned an invalid response")
     if payload.get("success") is False:
         _raise_for_error(payload)
+    if not 200 <= resp.status_code < 300:
+        detail = payload.get("detail") or payload.get("error") or f"http {resp.status_code}"
+        raise TorBoxError(_safe_message(detail))
     return payload.get("data", payload)
 
 
-def _safe_message(err: Exception) -> str:
-    # requests error text embeds the raw url; requestdl urls carry the key
-    return re.sub(r"token=[^&\s)]+", "token=<redacted>", str(err))
+def _download_url(value) -> str:
+    if not isinstance(value, str) or "\\" in value or any(c.isspace() for c in value):
+        raise TorBoxError("torbox returned an invalid download url")
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        raise TorBoxError("torbox returned an invalid download url") from None
+    host = parts.hostname
+    if (parts.scheme != "https" or not host or parts.username is not None
+            or parts.password is not None):
+        raise TorBoxError("torbox returned an invalid download url")
+    clean_host = host.rstrip(".").lower()
+    if clean_host == "localhost" or clean_host.endswith((".localhost", ".local")):
+        raise TorBoxError("torbox returned a local download url")
+    try:
+        address = ipaddress.ip_address(clean_host)
+    except ValueError:
+        if "." not in clean_host:
+            raise TorBoxError("torbox returned an invalid download url") from None
+        return value
+    if not address.is_global:
+        raise TorBoxError("torbox returned a local download url")
+    return value
 
 
 MAX_ADDS_PER_HOUR = 55  # torbox caps uncached adds at 60/hour, leave headroom
@@ -116,7 +150,7 @@ class TorBoxClient:
         params = {"token": self.key, "torrent_id": str(torrent_id), "file_id": str(file_id)}
         if zip_link:
             params["zip_link"] = "true"
-        return self._request("GET", "torrents/requestdl", params=params)
+        return _download_url(self._request("GET", "torrents/requestdl", params=params))
 
     def create(self, magnet: str | None = None, torrent_path: str | None = None,
                seed: int = 3, as_queued: bool = False,
@@ -134,14 +168,19 @@ class TorBoxClient:
             form["magnet"] = magnet
             # no retry: a timed-out add may still land; caller reconciles
             return self._request("POST", "torrents/createtorrent", data=form, tries=1)
-        with open(torrent_path, "rb") as fh:
-            # torbox's parser rejects file parts without a content type
-            return self._request(
-                "POST", "torrents/createtorrent", data=form,
-                files={"file": (os.path.basename(torrent_path), fh,
-                                "application/x-bittorrent")},
-                tries=1,
-            )
+        if not torrent_path:
+            raise TorBoxError("torrent path is required")
+        path = Path(torrent_path)
+        try:
+            with path.open("rb") as fh:
+                # torbox's parser rejects file parts without a content type
+                return self._request(
+                    "POST", "torrents/createtorrent", data=form,
+                    files={"file": (path.name, fh, "application/x-bittorrent")},
+                    tries=1,
+                )
+        except OSError as e:
+            raise TorBoxError(f"cannot read torrent file ({e.__class__.__name__})") from None
 
     def magnettofile(self, magnet: str) -> bytes:
         # conversion only, adds nothing to the cloud; raw bencode, not the

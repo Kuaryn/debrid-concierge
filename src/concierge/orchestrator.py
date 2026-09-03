@@ -21,6 +21,8 @@ MAX_POLL_ERRORS = 6
 MAX_MISSING_POLLS = 3
 TERMINAL = (DONE, FAILED)
 KEEP_TERMINAL = 20  # finished jobs double as click-dedupe, keep the newest 20
+WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+                    *(f"LPT{i}" for i in range(1, 10))}
 
 
 def _btih(magnet: str) -> str | None:
@@ -30,6 +32,19 @@ def _btih(magnet: str) -> str | None:
         if part.startswith("xt=urn:btih:"):
             return part[len("xt=urn:btih:"):].lower()
     return None
+
+
+def _file_name(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    name = value.replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join("_" if ord(c) < 32 or c in '<>:"/\\|?*' else c for c in name)
+    name = name.strip(" .")[:240].rstrip(" .")
+    if not name or name in {".", ".."}:
+        return None
+    if name.split(".", 1)[0].upper() in WINDOWS_RESERVED:
+        name = "_" + name
+    return name
 
 
 @dataclass
@@ -200,6 +215,10 @@ class Orchestrator:
         j.poll_errors = 0
         if isinstance(items, dict):  # mylist?id= returns the object, not a list
             items = [items]
+        elif not isinstance(items, list):
+            j.state = FAILED
+            j.error = "torbox returned an invalid torrent list"
+            return
         it = items[0] if items else None
         if not it:
             j.missing_polls += 1
@@ -207,20 +226,43 @@ class Orchestrator:
             if j.missing_polls >= MAX_MISSING_POLLS:
                 j.state = FAILED
             return
+        if not isinstance(it, dict):
+            j.state = FAILED
+            j.error = "torbox returned an invalid torrent"
+            return
         j.missing_polls = 0
         j.error = None
-        if it.get("download_finished") or (it.get("progress") or 0) >= 1:
-            j.files = it.get("files") or []
+        progress = it.get("progress")
+        if progress is not None and (isinstance(progress, bool)
+                                     or not isinstance(progress, (int, float))
+                                     or not 0 <= progress <= 1):
+            j.state = FAILED
+            j.error = "torbox returned invalid progress"
+            return
+        if it.get("download_finished") is True or (progress or 0) >= 1:
+            files = it.get("files")
+            if not isinstance(files, list) or not files:
+                j.state = FAILED
+                j.error = "completed torrent returned no files"
+                return
+            if any(not isinstance(f, dict) or f.get("id") is None for f in files):
+                j.state = FAILED
+                j.error = "torbox returned an invalid file list"
+                return
+            j.files = files
             j.state = READY
 
     def _handoff(self, j: Job):
         # resume from j.handed so a crashed retry never double-adds to abdm
         try:
+            if not j.files:
+                raise torbox.TorBoxError("completed torrent returned no files")
             if j.handed < len(j.files):
                 f = j.files[j.handed]
+                if not isinstance(f, dict) or f.get("id") is None:
+                    raise torbox.TorBoxError("torbox returned an invalid file list")
                 link = self.tb.requestdl(j.torrent_id, f["id"])
-                # abdm rejects '/' in names; torbox nests subfolders in them
-                name = (f.get("name") or "").rsplit("/", 1)[-1]
+                name = _file_name(f.get("name"))
                 self.adm.handoff(link, j.folder, name=name)
                 j.handed += 1
                 # persist per file: a crash here must not replay handed files

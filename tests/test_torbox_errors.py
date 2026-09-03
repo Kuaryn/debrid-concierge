@@ -6,7 +6,7 @@ import requests
 from concierge.providers import torbox
 
 
-def _fake_response(status: int, body: dict):
+def _fake_response(status: int, body):
     resp = requests.Response()
     resp.status_code = status
     resp.encoding = "utf-8"
@@ -25,6 +25,18 @@ def test_cooldown_limit_carries_until():
         torbox._raise_for_error(payload)
     assert exc.value.cooldown_until == "2026-09-01T06:45:40Z"
     assert "cooldown" in str(exc.value)
+
+
+def test_cooldown_ignores_malformed_data():
+    payload = {"success": False, "error": "COOLDOWN_LIMIT", "data": ["bad"]}
+    with pytest.raises(torbox.CooldownLimit) as exc:
+        torbox._raise_for_error(payload)
+    assert exc.value.cooldown_until is None
+
+
+def test_error_ignores_non_string_name():
+    with pytest.raises(torbox.TorBoxError, match="unknown torbox error"):
+        torbox._raise_for_error({"success": False, "error": ["bad"]})
 
 
 def test_active_limit():
@@ -76,6 +88,18 @@ def test_parse_rejects_401():
         torbox._parse(resp)
 
 
+def test_parse_rejects_other_http_errors():
+    resp = _fake_response(403, {"detail": "forbidden"})
+    with pytest.raises(torbox.TorBoxError, match="forbidden"):
+        torbox._parse(resp)
+
+
+def test_parse_rejects_non_object_json():
+    resp = _fake_response(200, ["not", "an", "object"])
+    with pytest.raises(torbox.TorBoxError, match="invalid response"):
+        torbox._parse(resp)
+
+
 def test_safe_message_redacts_token():
     err = requests.RequestException(
         "Max retries exceeded with url: /v1/torrents/requestdl?token=SECRET123&torrent_id=1 (boom)"
@@ -83,3 +107,17 @@ def test_safe_message_redacts_token():
     out = torbox._safe_message(err)
     assert "SECRET123" not in out
     assert "token=<redacted>" in out
+
+
+def test_safe_message_redacts_encoded_and_uppercase_tokens():
+    upper = torbox._safe_message("https://x/?TOKEN=SECRET123&id=1")
+    encoded = torbox._safe_message("https://x/?token%3DSECRET123%26id%3D1")
+    assert "SECRET123" not in upper
+    assert "SECRET123" not in encoded
+
+
+def test_server_error_detail_is_redacted():
+    payload = {"success": False, "error": "BAD", "detail": "token=SECRET123"}
+    with pytest.raises(torbox.TorBoxError) as exc:
+        torbox._raise_for_error(payload)
+    assert "SECRET123" not in str(exc.value)
