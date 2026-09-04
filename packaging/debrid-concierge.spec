@@ -1,9 +1,13 @@
 from pathlib import Path
 
+from PyInstaller.config import CONF
+
 
 ROOT = Path(SPECPATH).parent
 SRC = str(ROOT / "src")
 
+# I keep separate reports because each analysis overwrites the default warning file.
+CONF["warnfile"] = str(Path(workpath) / "warn-tray.txt")
 tray = Analysis(
     [str(ROOT / "win_tray.py")],
     pathex=[SRC],
@@ -17,6 +21,7 @@ tray = Analysis(
     noarchive=False,
     optimize=0,
 )
+CONF["warnfile"] = str(Path(workpath) / "warn-handler.txt")
 handler = Analysis(
     [str(ROOT / "win_handler.py")],
     pathex=[SRC],
@@ -30,6 +35,7 @@ handler = Analysis(
     noarchive=False,
     optimize=0,
 )
+CONF["warnfile"] = str(Path(workpath) / "warn-worker.txt")
 worker = Analysis(
     [str(ROOT / "win_worker.py")],
     pathex=[SRC],

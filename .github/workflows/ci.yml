@@ -11,5 +11,21 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff pytest requests
-      - run: ruff check src tests repoint.py win_handler.py win_tray.py win_worker.py
+      - run: ruff check src tests repoint.py win_handler.py win_tray.py win_worker.py packaging/check_bundle.py
       - run: pytest -m "not integration" -v
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install ".[build]" ruff pytest
+      - run: python -m ruff check src tests repoint.py win_handler.py win_tray.py win_worker.py packaging/check_bundle.py
+      - run: python -m pytest -q -m "not integration"
+      - run: python -m PyInstaller --clean --noconfirm packaging/debrid-concierge.spec
+      - run: python packaging/check_bundle.py
