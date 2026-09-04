@@ -393,7 +393,7 @@ class Orchestrator:
                 j.state = FAILED
                 j.error = "torbox returned an invalid file list"
                 return
-            j.files = files
+            j.files = [{"id": f["id"], "name": f.get("name")} for f in files]
             j.state = READY
 
     def _handoff(self, j: Job):

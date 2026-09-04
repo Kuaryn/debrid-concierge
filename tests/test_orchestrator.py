@@ -202,6 +202,59 @@ def test_multifile_poll_then_handoff(env):
     assert all(h[1] == "C:/dl" for h in adm.handed)
 
 
+def test_poll_saves_only_needed_file_fields_and_resumes(env, tmp_path):
+    o, tb, adm = env
+    folder = str(tmp_path / "downloads")
+    j = o.submit(folder, magnet="m")
+    tb.items = {"progress": 1, "files": [
+        {"id": 1, "name": "pack/a.mkv", "size": 123, "s3_path": "unused"},
+        {"id": 2, "mimetype": "application/octet-stream"},
+    ]}
+    expected = [{"id": 1, "name": "pack/a.mkv"}, {"id": 2, "name": None}]
+
+    o.tick()
+
+    assert json.loads(orch.JOBS_FILE.read_text())[0]["files"] == expected
+    assert tb.items["files"][0]["s3_path"] == "unused"
+    loaded = Orchestrator(tb=tb, adm=adm)
+    loaded.tick()
+    assert loaded.jobs[j.job_id].handed == 1
+    loaded = Orchestrator(tb=tb, adm=adm)
+    loaded.tick()
+    assert adm.handed == [
+        ("https://cdn.example/1", folder, "a.mkv"),
+        ("https://cdn.example/2", folder, None),
+    ]
+    loaded = Orchestrator(tb=tb, adm=adm)
+    done = loaded.match("m")
+    assert loaded.load_warning is None
+    assert done.state == DONE
+    assert done.handed == 2
+    assert done.files == expected
+    assert tb.create_calls == 1
+
+
+def test_large_file_list_stays_small_on_disk(env, tmp_path):
+    o, tb, _ = env
+    o.submit(str(tmp_path / "downloads"), magnet="m")
+    tb.items = {"progress": 1, "files": [
+        {"id": i, "name": f"pack/file-{i:04}.mkv", "size": 123456789,
+         "md5": "a" * 32, "s3_path": "unused/" + "x" * 256,
+         "mimetype": "video/x-matroska", "short_name": f"file-{i:04}.mkv"}
+        for i in range(1, 1201)
+    ]}
+
+    o.tick()
+
+    assert orch.JOBS_FILE.stat().st_size < 100_000
+    loaded = Orchestrator(tb=tb, adm=_StubAdm())
+    (job,) = loaded.jobs.values()
+    assert loaded.load_warning is None
+    assert job.state == READY
+    assert len(job.files) == 1200
+    assert job.files[-1] == {"id": 1200, "name": "pack/file-1200.mkv"}
+
+
 def test_handoff_strips_subfolder_from_name(env):
     o, _, adm = env
     j = Job(source="m", folder="C:/dl", state=READY, torrent_id=7,
