@@ -1,4 +1,9 @@
+import runpy
 import subprocess
+import sys
+from pathlib import Path
+
+import pytest
 
 from concierge import handlers, worker
 from concierge import orchestrator as orch
@@ -109,3 +114,72 @@ def test_blocking_without_folder_passes_none(monkeypatch):
     rc = handlers.main(["magnet:?xt=urn:btih:x"])
     assert rc == 0
     assert calls == [("magnet:?xt=urn:btih:x", None)]
+
+
+@pytest.mark.parametrize("detach", [False, True])
+@pytest.mark.parametrize("source", [
+    'magnet:?dn="private"',
+    "magnet:?dn=line\rbreak",
+    "magnet:?dn=line\nbreak",
+    "magnet:?dn=tab\tname",
+    "magnet:?dn=null\x00name",
+    "magnet:?dn=delete\x7fname",
+    "magnet:?dn=control\x85name",
+    "--folder=private",
+])
+def test_unsafe_source_stops_before_worker(monkeypatch, capsys, source, detach):
+    def unexpected(*args, **kwargs):
+        pytest.fail("unsafe source reached the worker or filesystem")
+
+    monkeypatch.setattr(subprocess, "Popen", unexpected)
+    monkeypatch.setattr(worker, "run", unexpected)
+    monkeypatch.setattr(handlers.os.path, "isfile", unexpected)
+    args = ["--detach"] if detach else []
+    with pytest.raises(SystemExit) as exc:
+        handlers.main([*args, "--", source])
+    assert exc.value.code == 2
+    output = capsys.readouterr()
+    assert "invalid source" in output.err
+    assert source not in output.out + output.err
+
+
+@pytest.mark.parametrize("torrent", [False, True])
+def test_registry_entry_ignores_extra_options(monkeypatch, tmp_path, capsys, torrent):
+    source = "magnet:?xt=urn:btih:x&dn=Alice's%20file&tr=https%3A%2F%2Ftracker.invalid"
+    if torrent:
+        path = tmp_path / "Alice's file with spaces.torrent"
+        path.write_bytes(b"")
+        source = str(path)
+    spawned = []
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: spawned.append(argv))
+    monkeypatch.setattr(sys, "argv", ["win_handler.py", source, "--folder",
+                                    str(tmp_path / "Startup")])
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_path(str(Path(__file__).resolve().parents[1] / "win_handler.py"))
+    assert exc.value.code == 0
+    assert spawned == [handlers._worker_command(source)]
+    output = capsys.readouterr()
+    assert source not in output.out + output.err
+
+
+@pytest.mark.parametrize("args", [[], ["--help"], ["--folder=private"]])
+def test_registry_entry_requires_a_source(monkeypatch, args):
+    def unexpected(*args, **kwargs):
+        pytest.fail("invalid registry arguments launched a worker")
+
+    monkeypatch.setattr(subprocess, "Popen", unexpected)
+    monkeypatch.setattr(sys, "argv", ["win_handler.py", *args])
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_path(str(Path(__file__).resolve().parents[1] / "win_handler.py"))
+    assert exc.value.code == 2
+
+
+def test_detach_does_not_print_magnet(monkeypatch, capsys):
+    source = "magnet:?xt=urn:btih:x&tr=https%3A%2F%2Ftracker.invalid%2Fprivate-tracker-value"
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kw: None)
+    assert handlers.main([source, "--detach"]) == 0
+    output = capsys.readouterr()
+    assert source not in output.out + output.err
+    assert "private-tracker-value" not in output.out + output.err

@@ -23,9 +23,17 @@ def _worker_command(source: str) -> list[str]:
     return [sys.executable, str(WORKER_ENTRY), "--source", source]
 
 
+def _source(value: str) -> str:
+    if value.startswith("-") or '"' in value or any(
+        ord(c) < 32 or 127 <= ord(c) <= 159 for c in value
+    ):
+        raise argparse.ArgumentTypeError("invalid source")
+    return value
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="concierge")
-    ap.add_argument("source", help="magnet: link or path to a .torrent file")
+    ap.add_argument("source", type=_source, help="magnet: link or path to a .torrent file")
     ap.add_argument("--folder",
                     help="download folder; a dialog asks when omitted")
     ap.add_argument("--detach", action="store_true",
@@ -49,7 +57,6 @@ def main(argv=None) -> int:
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             env=env,
         )
-        print("spawned worker for", a.source)
         return 0
     # blocking mode takes the same lock as a detached worker
     job = worker.run(a.source, a.folder)

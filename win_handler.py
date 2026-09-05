@@ -7,4 +7,5 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from concierge.handlers import main
 
-sys.exit(main([*sys.argv[1:], "--detach"]))
+# I keep shell input after -- so a clicked source cannot become a worker option.
+sys.exit(main(["--detach", "--", *sys.argv[1:2]]))
